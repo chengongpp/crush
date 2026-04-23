@@ -56,7 +56,7 @@ func queuePill(queue int, focused, panelFocused bool, t *styles.Styles) string {
 	if queue <= 0 {
 		return ""
 	}
-	triangles := styles.ForegroundGrad(t, "▶▶▶▶▶▶▶▶▶", false, t.RedDark, t.Secondary)
+	triangles := styles.ForegroundGrad(t.Base, "▶▶▶▶▶▶▶▶▶", false, t.Pills.QueueGradFromColor, t.Secondary)
 	if queue < len(triangles) {
 		triangles = triangles[:queue]
 	}
