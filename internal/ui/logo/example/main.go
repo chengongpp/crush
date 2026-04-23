@@ -3,10 +3,13 @@ package main
 import (
 	"fmt"
 	"math/rand/v2"
+	"os"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/crush/internal/ui/logo"
+	"github.com/charmbracelet/crush/internal/ui/styles"
 	"github.com/charmbracelet/x/exp/slice"
+	"github.com/charmbracelet/x/term"
 )
 
 func renderLetterforms(stretch bool) string {
@@ -42,8 +45,26 @@ func renderLetterforms(stretch bool) string {
 }
 
 func main() {
+	w, _, err := term.GetSize(os.Stdout.Fd())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Could not get terminal size: %s", err)
+	}
+
+	s := styles.DefaultStyles()
+	opts := logo.Opts{
+		FieldColor:   s.LogoFieldColor,
+		TitleColorA:  s.LogoTitleColorA,
+		TitleColorB:  s.LogoTitleColorB,
+		CharmColor:   s.LogoCharmColor,
+		VersionColor: s.LogoVersionColor,
+		Width:        w,
+	}
+
+	lipgloss.Println(logo.Render(s.Base, "v1.0.0", false, opts))
+	lipgloss.Println(logo.Render(s.Base, "v1.0.0", true, opts))
+
 	fmt.Println(renderLetterforms(false))
-	for range 10 {
+	for range 5 {
 		fmt.Println(renderLetterforms(true))
 	}
 }

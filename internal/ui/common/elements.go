@@ -193,7 +193,7 @@ func DialogTitle(t *styles.Styles, title string, width int, fromColor, toColor c
 	remainingWidth := width - length
 	if remainingWidth > 0 {
 		lines := strings.Repeat(char, remainingWidth)
-		lines = styles.ApplyForegroundGrad(t, lines, fromColor, toColor)
+		lines = styles.ApplyForegroundGrad(t.Base, lines, fromColor, toColor)
 		title = title + " " + lines
 	}
 	return title

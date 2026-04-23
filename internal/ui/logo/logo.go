@@ -23,8 +23,9 @@ type Opts struct {
 	TitleColorA  color.Color // left gradient ramp point
 	TitleColorB  color.Color // right gradient ramp point
 	CharmColor   color.Color // Charm™ text color
-	VersionColor color.Color // Version text color
+	VersionColor color.Color // version text color
 	Width        int         // width of the rendered logo, used for truncation
+	Hyper        bool        // whether it is Crush or Hypercrush
 }
 
 // Render renders the Crush logo. Set the argument to true to render the narrow
@@ -32,7 +33,7 @@ type Opts struct {
 //
 // The compact argument determines whether it renders compact for the sidebar
 // or wider for the main pane.
-func Render(s *styles.Styles, version string, compact bool, o Opts) string {
+func Render(base lipgloss.Style, version string, compact bool, o Opts) string {
 	const charm = " Charm™"
 
 	fg := func(c color.Color, s string) string {
@@ -52,12 +53,11 @@ func Render(s *styles.Styles, version string, compact bool, o Opts) string {
 	if !compact {
 		stretchIndex = cachedRandN(len(letterforms))
 	}
-
 	crush := renderWord(spacing, stretchIndex, letterforms...)
 	crushWidth := lipgloss.Width(crush)
 	b := new(strings.Builder)
 	for r := range strings.SplitSeq(crush, "\n") {
-		fmt.Fprintln(b, styles.ApplyForegroundGrad(s, r, o.TitleColorA, o.TitleColorB))
+		fmt.Fprintln(b, styles.ApplyForegroundGrad(base, r, o.TitleColorA, o.TitleColorB))
 	}
 	crush = b.String()
 
@@ -117,7 +117,7 @@ func Render(s *styles.Styles, version string, compact bool, o Opts) string {
 // smaller windows or sidebar usage.
 func SmallRender(t *styles.Styles, width int) string {
 	title := t.Base.Foreground(t.Secondary).Render("Charm™")
-	title = fmt.Sprintf("%s %s", title, styles.ApplyBoldForegroundGrad(t, "Crush", t.Secondary, t.Primary))
+	title = fmt.Sprintf("%s %s", title, styles.ApplyBoldForegroundGrad(t.Base, "Crush", t.Secondary, t.Primary))
 	remainingWidth := width - lipgloss.Width(title) - 1 // 1 for the space after "Crush"
 	if remainingWidth > 0 {
 		lines := strings.Repeat("╱", remainingWidth)
