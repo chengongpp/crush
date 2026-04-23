@@ -20,23 +20,23 @@ func main() {
 
 	s := styles.DefaultStyles()
 	opts := logo.Opts{
-		FieldColor:   s.LogoFieldColor,
-		TitleColorA:  s.LogoTitleColorA,
-		TitleColorB:  s.LogoTitleColorB,
-		CharmColor:   s.LogoCharmColor,
-		VersionColor: s.LogoVersionColor,
+		FieldColor:   s.Logo.FieldColor,
+		TitleColorA:  s.Logo.TitleColorA,
+		TitleColorB:  s.Logo.TitleColorB,
+		CharmColor:   s.Logo.CharmColor,
+		VersionColor: s.Logo.VersionColor,
 		Width:        w,
 		Unstable:     true,
 	}
 
 	renderCompact := func(hyper bool) string {
 		opts.Hyper = hyper
-		return logo.Render(s.Base, "v1.0.0", true, opts)
+		return logo.Render(s.Logo.GradCanvas, "v1.0.0", true, opts)
 	}
 
 	renderWide := func(hyper bool) string {
 		opts.Hyper = hyper
-		return logo.Render(s.Base, "v1.0.0", false, opts)
+		return logo.Render(s.Logo.GradCanvas, "v1.0.0", false, opts)
 	}
 
 	lipgloss.Println(
