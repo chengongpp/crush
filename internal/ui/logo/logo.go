@@ -4,6 +4,7 @@ package logo
 import (
 	"fmt"
 	"image/color"
+	"math/rand/v2"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -26,6 +27,11 @@ type Opts struct {
 	VersionColor color.Color // version text color
 	Width        int         // width of the rendered logo, used for truncation
 	Hyper        bool        // whether it is Crush or Hypercrush
+
+	// When true, stretch a random letterform on each render. Has no effect in
+	// compact mode. Mainly for testing. In production you will want to cache
+	// the stretched letterform to keep the logo from jittering on resize.
+	Unstable bool
 }
 
 // Render renders the Crush logo. Set the argument to true to render the narrow
@@ -34,7 +40,10 @@ type Opts struct {
 // The compact argument determines whether it renders compact for the sidebar
 // or wider for the main pane.
 func Render(base lipgloss.Style, version string, compact bool, o Opts) string {
-	const charm = " Charm™"
+	charm := "Charm™"
+	if !o.Hyper {
+		charm = " " + charm
+	}
 
 	fg := func(c color.Color, s string) string {
 		return lipgloss.NewStyle().Foreground(c).Render(s)
@@ -42,18 +51,39 @@ func Render(base lipgloss.Style, version string, compact bool, o Opts) string {
 
 	// Title.
 	const spacing = 1
-	letterforms := []letterform{
+	var hyperLetterforms []letterform
+	if o.Hyper {
+		hyperLetterforms = []letterform{
+			LetterH,
+			LetterYAlt,
+			LetterP,
+			LetterE,
+			LetterR,
+		}
+	}
+	crushLetterforms := []letterform{
 		LetterC,
 		LetterR,
 		LetterU,
 		LetterSAlt,
 		LetterH,
 	}
-	stretchIndex := -1 // -1 means no stretching.
-	if !compact {
-		stretchIndex = cachedRandN(len(letterforms))
+	if o.Hyper && !compact {
+		crushLetterforms = append(hyperLetterforms, crushLetterforms...)
 	}
-	crush := renderWord(spacing, stretchIndex, letterforms...)
+
+	stretchIndex := -1 // -1 means no stretching.
+	if !compact && !o.Unstable {
+		// Always stretch the same letterform, which is picked once at random.
+		stretchIndex = cachedRandN(len(crushLetterforms))
+	} else if !compact && o.Unstable {
+		// Stretch a random letterform on every render.
+		stretchIndex = rand.IntN(len(crushLetterforms))
+	}
+	crush := renderWord(spacing, stretchIndex, crushLetterforms...)
+	if o.Hyper && compact {
+		crush = renderWord(spacing, stretchIndex, hyperLetterforms...) + "\n" + crush
+	}
 	crushWidth := lipgloss.Width(crush)
 	b := new(strings.Builder)
 	for r := range strings.SplitSeq(crush, "\n") {
@@ -65,13 +95,16 @@ func Render(base lipgloss.Style, version string, compact bool, o Opts) string {
 	metaRowGap := 1
 	maxVersionWidth := crushWidth - lipgloss.Width(charm) - metaRowGap
 	version = ansi.Truncate(version, maxVersionWidth, "…") // truncate version if too long.
+	if o.Hyper && compact {
+		version += " "
+	}
 	gap := max(0, crushWidth-lipgloss.Width(charm)-lipgloss.Width(version))
 	metaRow := fg(o.CharmColor, charm) + strings.Repeat(" ", gap) + fg(o.VersionColor, version)
 
 	// Join the meta row and big Crush title.
 	crush = strings.TrimSpace(metaRow + "\n" + crush)
 
-	// Narrow version.
+	// Narrow version. If this is Hypercrush, this is also a stacked version.
 	if compact {
 		field := fg(o.FieldColor, strings.Repeat(diag, crushWidth))
 		return strings.Join([]string{field, field, crush, field, ""}, "\n")
