@@ -330,6 +330,18 @@ type Styles struct {
 		ResourceSize            lipgloss.Style
 		MediaType               lipgloss.Style
 
+		// Hooks
+		HookLabel        lipgloss.Style // "Hook" label
+		HookName         lipgloss.Style // Hook command name
+		HookMatcher      lipgloss.Style // Matcher regex pattern
+		HookArrow        lipgloss.Style // Arrow indicator
+		HookDetail       lipgloss.Style // Decision detail text
+		HookOK           lipgloss.Style // "OK" status
+		HookDenied       lipgloss.Style // "Denied" status
+		HookDeniedLabel  lipgloss.Style // "Hook" label when denied
+		HookDeniedReason lipgloss.Style // Denied reason text
+		HookRewrote      lipgloss.Style // "Rewrote Input" indicator
+
 		// Action verb colors for tool-call headers.
 		ActionCreate  lipgloss.Style // Constructive actions (e.g. "Add", "Create")
 		ActionDestroy lipgloss.Style // Destructive actions (e.g. "Remove", "Delete")
@@ -1215,6 +1227,18 @@ func DefaultStyles() Styles {
 	s.Tool.ResultTruncation = lipgloss.NewStyle().Foreground(fgSubtle)
 	s.Tool.ResultItemName = lipgloss.NewStyle().Foreground(fgBase)
 	s.Tool.ResultItemDesc = lipgloss.NewStyle().Foreground(fgSubtle)
+
+	// Hook styles
+	s.Tool.HookLabel = base.Foreground(green)
+	s.Tool.HookName = base
+	s.Tool.HookMatcher = base.Foreground(fgMuted)
+	s.Tool.HookArrow = base.Foreground(green)
+	s.Tool.HookDetail = base.Foreground(fgMuted)
+	s.Tool.HookOK = base.Foreground(charmtone.Guac)
+	s.Tool.HookDenied = base.Foreground(charmtone.Sriracha)
+	s.Tool.HookDeniedLabel = base.Foreground(red)
+	s.Tool.HookDeniedReason = base.Foreground(charmtone.Iron)
+	s.Tool.HookRewrote = base.Foreground(charmtone.Iron)
 
 	// Buttons
 	s.Button.Focused = lipgloss.NewStyle().Foreground(white).Background(secondary)

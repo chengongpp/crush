@@ -39,7 +39,6 @@ import (
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/csync"
 	"github.com/charmbracelet/crush/internal/message"
-	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/charmbracelet/crush/internal/session"
 	"github.com/charmbracelet/crush/internal/stringext"
@@ -415,6 +414,18 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 			case fantasy.FinishReasonToolCalls:
 				finishReason = message.FinishReasonToolUse
 			}
+			// If a tool result halted the turn (e.g. a hook halt or a
+			// permission denial), the step ends on FinishReasonToolCalls but
+			// the model will not be called again. Treat it as the end of the
+			// turn so the UI can render the assistant footer.
+			if finishReason == message.FinishReasonToolUse {
+				for _, tr := range stepResult.Content.ToolResults() {
+					if tr.StopTurn {
+						finishReason = message.FinishReasonEndTurn
+						break
+					}
+				}
+			}
 			currentAssistant.AddFinish(finishReason, "", "")
 			sessionLock.Lock()
 			defer sessionLock.Unlock()
@@ -464,7 +475,6 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 	if err != nil {
 		isHyper := largeModel.ModelCfg.Provider == hyper.Name
 		isCancelErr := errors.Is(err, context.Canceled)
-		isPermissionErr := errors.Is(err, permission.ErrorPermissionDenied)
 		if currentAssistant == nil {
 			return result, err
 		}
@@ -507,8 +517,6 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 			content := "There was an error while executing the tool"
 			if isCancelErr {
 				content = "Error: user cancelled assistant tool calling"
-			} else if isPermissionErr {
-				content = "User denied permission"
 			}
 			toolResult := message.ToolResult{
 				ToolCallID: tc.ID,
@@ -532,8 +540,6 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 		linkStyle := lipgloss.NewStyle().Foreground(charmtone.Guac).Underline(true)
 		if isCancelErr {
 			currentAssistant.AddFinish(message.FinishReasonCanceled, "User canceled request", "")
-		} else if isPermissionErr {
-			currentAssistant.AddFinish(message.FinishReasonPermissionDenied, "User denied permission", "")
 		} else if isHyper && errors.As(err, &providerErr) && providerErr.StatusCode == http.StatusUnauthorized {
 			currentAssistant.AddFinish(message.FinishReasonError, "Unauthorized", `Please re-authenticate with Hyper. You can also run "crush auth" to re-authenticate.`)
 			if a.notify != nil {
