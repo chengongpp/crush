@@ -89,12 +89,44 @@
         "tools": {
           "$ref": "#/$defs/Tools",
           "description": "Tool configurations"
+        },
+        "hooks": {
+          "additionalProperties": {
+            "items": {
+              "$ref": "#/$defs/HookConfig"
+            },
+            "type": "array"
+          },
+          "type": "object",
+          "description": "User-defined shell commands that fire on hook events (e.g. PreToolUse)"
         }
       },
       "additionalProperties": false,
       "type": "object",
       "required": [
         "tools"
+      ]
+    },
+    "HookConfig": {
+      "properties": {
+        "matcher": {
+          "type": "string",
+          "description": "Regex pattern tested against the tool name. Empty means match all tools."
+        },
+        "command": {
+          "type": "string",
+          "description": "Shell command to execute when the hook fires"
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "Timeout in seconds for the hook command",
+          "default": 30
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "command"
       ]
     },
     "LSPConfig": {
