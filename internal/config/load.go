@@ -471,6 +471,23 @@ func (c *Config) setDefaults(workingDir, dataDir string) {
 		}
 	}
 	c.Options.InitializeAs = cmp.Or(c.Options.InitializeAs, defaultInitializeAs)
+
+	if c.Bots == nil {
+		c.Bots = &BotsConfig{}
+	}
+	if c.Bots.WeCom == nil {
+		if c.WeCom != nil {
+			c.Bots.WeCom = c.WeCom
+		} else {
+			c.Bots.WeCom = &WeComConfig{}
+		}
+	}
+	c.Bots.WeCom.WebSocketURL = cmp.Or(c.Bots.WeCom.WebSocketURL, "wss://openws.work.weixin.qq.com")
+	c.Bots.WeCom.HeartbeatIntervalSeconds = cmp.Or(c.Bots.WeCom.HeartbeatIntervalSeconds, 30)
+	c.Bots.WeCom.ReconnectIntervalSeconds = cmp.Or(c.Bots.WeCom.ReconnectIntervalSeconds, 1)
+	c.Bots.WeCom.MaxReconnectAttempts = cmp.Or(c.Bots.WeCom.MaxReconnectAttempts, 10)
+	c.Bots.WeCom.MaxAuthFailureAttempts = cmp.Or(c.Bots.WeCom.MaxAuthFailureAttempts, 5)
+	c.Bots.WeCom.ThinkingMessage = cmp.Or(c.Bots.WeCom.ThinkingMessage, "思考中...")
 }
 
 // applyLSPDefaults applies default values from powernap to LSP configurations

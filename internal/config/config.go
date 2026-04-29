@@ -391,6 +391,27 @@ func (h *HookConfig) TimeoutDuration() time.Duration {
 	return time.Duration(h.Timeout) * time.Second
 }
 
+type WeComConfig struct {
+	Enabled bool `json:"enabled,omitempty" jsonschema:"description=Enable the WeCom bot bridge configuration,default=false"`
+
+	BotID  string `json:"bot_id,omitempty" jsonschema:"description=WeCom bot ID used for WebSocket authentication"`
+	Secret string `json:"secret,omitempty" jsonschema:"description=WeCom bot secret used for WebSocket authentication"`
+
+	WebSocketURL string `json:"websocket_url,omitempty" jsonschema:"description=WeCom bot WebSocket endpoint,format=uri,example=wss://openws.work.weixin.qq.com"`
+
+	HeartbeatIntervalSeconds int `json:"heartbeat_interval_seconds,omitempty" jsonschema:"description=Heartbeat interval in seconds for the WeCom WebSocket connection,default=30"`
+	ReconnectIntervalSeconds int `json:"reconnect_interval_seconds,omitempty" jsonschema:"description=Base reconnect delay in seconds for the WeCom WebSocket connection,default=1"`
+	MaxReconnectAttempts     int `json:"max_reconnect_attempts,omitempty" jsonschema:"description=Maximum reconnect attempts after network disconnects,default=10"`
+	MaxAuthFailureAttempts   int `json:"max_auth_failure_attempts,omitempty" jsonschema:"description=Maximum reconnect attempts after authentication failures,default=5"`
+
+	ThinkingMessage        string `json:"thinking_message,omitempty" jsonschema:"description=Temporary message sent to WeCom while Crush is generating a reply,default=思考中..."`
+	AutoApprovePermissions bool   `json:"auto_approve_permissions,omitempty" jsonschema:"description=Automatically approve Crush tool permission prompts when running the WeCom bot command,default=false"`
+}
+
+type BotsConfig struct {
+	WeCom *WeComConfig `json:"wecom,omitempty" jsonschema:"description=WeCom bot bridge configuration"`
+}
+
 // Config holds the configuration for crush.
 type Config struct {
 	Schema string `json:"$schema,omitempty"`
@@ -415,6 +436,11 @@ type Config struct {
 	Tools Tools `json:"tools,omitzero" jsonschema:"description=Tool configurations"`
 
 	Hooks map[string][]HookConfig `json:"hooks,omitempty" jsonschema:"description=User-defined shell commands that fire on hook events (e.g. PreToolUse)"`
+
+	Bots *BotsConfig `json:"bots,omitempty" jsonschema:"description=Bot bridge configurations"`
+
+	// Deprecated: use bots.wecom instead.
+	WeCom *WeComConfig `json:"wecom,omitempty" jsonschema:"-"`
 
 	Agents map[string]Agent `json:"-"`
 }

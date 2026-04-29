@@ -58,6 +58,27 @@ func TestConfig_setDefaults(t *testing.T) {
 	for _, path := range defaultContextPaths {
 		require.Contains(t, cfg.Options.ContextPaths, path)
 	}
+	require.NotNil(t, cfg.Bots)
+	require.NotNil(t, cfg.Bots.WeCom)
+	require.Equal(t, "wss://openws.work.weixin.qq.com", cfg.Bots.WeCom.WebSocketURL)
+}
+
+func TestConfig_setDefaultsMigratesLegacyWeComConfig(t *testing.T) {
+	cfg := &Config{
+		WeCom: &WeComConfig{
+			BotID:                  "legacy-bot",
+			Secret:                 "legacy-secret",
+			AutoApprovePermissions: true,
+		},
+	}
+
+	cfg.setDefaults("/tmp", "")
+
+	require.NotNil(t, cfg.Bots)
+	require.NotNil(t, cfg.Bots.WeCom)
+	require.Equal(t, "legacy-bot", cfg.Bots.WeCom.BotID)
+	require.Equal(t, "legacy-secret", cfg.Bots.WeCom.Secret)
+	require.True(t, cfg.Bots.WeCom.AutoApprovePermissions)
 }
 
 func TestConfig_configureProviders(t *testing.T) {

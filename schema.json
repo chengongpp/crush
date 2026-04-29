@@ -29,6 +29,16 @@
       "additionalProperties": false,
       "type": "object"
     },
+    "BotsConfig": {
+      "properties": {
+        "wecom": {
+          "$ref": "#/$defs/WeComConfig",
+          "description": "WeCom bot bridge configuration"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
     "Completions": {
       "properties": {
         "max_depth": {
@@ -99,6 +109,10 @@
           },
           "type": "object",
           "description": "User-defined shell commands that fire on hook events (e.g. PreToolUse)"
+        },
+        "bots": {
+          "$ref": "#/$defs/BotsConfig",
+          "description": "Bot bridge configurations"
         }
       },
       "additionalProperties": false,
@@ -769,6 +783,63 @@
         },
         "grep": {
           "$ref": "#/$defs/ToolGrep"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "WeComConfig": {
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable the WeCom bot bridge configuration",
+          "default": false
+        },
+        "bot_id": {
+          "type": "string",
+          "description": "WeCom bot ID used for WebSocket authentication"
+        },
+        "secret": {
+          "type": "string",
+          "description": "WeCom bot secret used for WebSocket authentication"
+        },
+        "websocket_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "WeCom bot WebSocket endpoint",
+          "examples": [
+            "wss://openws.work.weixin.qq.com"
+          ]
+        },
+        "heartbeat_interval_seconds": {
+          "type": "integer",
+          "description": "Heartbeat interval in seconds for the WeCom WebSocket connection",
+          "default": 30
+        },
+        "reconnect_interval_seconds": {
+          "type": "integer",
+          "description": "Base reconnect delay in seconds for the WeCom WebSocket connection",
+          "default": 1
+        },
+        "max_reconnect_attempts": {
+          "type": "integer",
+          "description": "Maximum reconnect attempts after network disconnects",
+          "default": 10
+        },
+        "max_auth_failure_attempts": {
+          "type": "integer",
+          "description": "Maximum reconnect attempts after authentication failures",
+          "default": 5
+        },
+        "thinking_message": {
+          "type": "string",
+          "description": "Temporary message sent to WeCom while Crush is generating a reply",
+          "default": "思考中..."
+        },
+        "auto_approve_permissions": {
+          "type": "boolean",
+          "description": "Automatically approve Crush tool permission prompts when running the WeCom bot command",
+          "default": false
         }
       },
       "additionalProperties": false,

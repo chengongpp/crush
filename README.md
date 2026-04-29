@@ -335,6 +335,51 @@ using `$(echo $VAR)` syntax.
 }
 ```
 
+### Bots
+
+#### WeCom
+
+Crush can also run as a **WeCom bot bridge** over the official bot WebSocket
+long connection.
+
+```json
+{
+  "$schema": "https://charm.land/crush.json",
+  "bots": {
+    "wecom": {
+      "enabled": true,
+      "bot_id": "YOUR_WECOM_BOT_ID",
+      "secret": "YOUR_WECOM_BOT_SECRET",
+      "thinking_message": "思考中...",
+      "auto_approve_permissions": true
+    }
+  }
+}
+```
+
+Start it with:
+
+```bash
+crush bot wecom
+```
+
+You can also override credentials from the command line:
+
+```bash
+crush bot wecom --bot-id "$WECOM_BOT_ID" --secret "$WECOM_BOT_SECRET"
+```
+
+The first version focuses on a reliable text bridge:
+
+- inbound support: text, mixed text, and voice transcript messages
+- outbound support: a temporary "thinking" message followed by the final text reply
+- conversation routing: one persistent Crush session per WeCom chat
+
+> [!IMPORTANT]
+> `crush bot wecom` runs unattended. Use `--yolo` or set
+> `bots.wecom.auto_approve_permissions=true`, otherwise tool permission prompts can
+> block replies.
+
 ### Hooks
 
 Crush has preliminary support for hooks. For details, see
