@@ -61,18 +61,6 @@ func (h *header) refresh() {
 	h.logo = ""
 }
 
-// refresh rebuilds cached logo strings using the current styles. Call
-// after the theme changes.
-func (h *header) refresh() {
-	t := h.com.Styles
-	h.compactLogo = t.Header.Charm.Render("Charm™") + " " +
-		styles.ApplyBoldForegroundGrad(t.Header.LogoGradCanvas, "CRUSH", t.Header.LogoGradFromColor, t.Header.LogoGradToColor) + " "
-	// Force drawHeader to re-render the wide logo on the next frame.
-	h.width = 0
-	h.logo = ""
-}
-
-// drawHeader draws the header for the given session.
 func (h *header) drawHeader(
 	scr uv.Screen,
 	area uv.Rectangle,

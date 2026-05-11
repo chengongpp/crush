@@ -32,12 +32,6 @@ type Opts struct {
 	// compact mode. Mainly for testing. In production you will want to cache
 	// the stretched letterform to keep the logo from jittering on resize.
 	Unstable bool
-	Hyper    bool // whether it is Crush or Hypercrush
-
-	// When true, stretch a random letterform on each render. Has no effect in
-	// compact mode. Mainly for testing. In production you will want to cache
-	// the stretched letterform to keep the logo from jittering on resize.
-	Unstable bool
 }
 
 // Render renders the Crush logo. Set the argument to true to render the narrow

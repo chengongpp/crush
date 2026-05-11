@@ -73,10 +73,6 @@ type Styles struct {
 		LogoGradCanvas    lipgloss.Style // Canvas for the compact "CRUSH" gradient
 		LogoGradFromColor color.Color    // "CRUSH" wordmark gradient start
 		LogoGradToColor   color.Color    // "CRUSH" wordmark gradient end
-		Wrapper           lipgloss.Style // Outer container for the entire header row
-		LogoGradCanvas    lipgloss.Style // Canvas for the compact "CRUSH" gradient
-		LogoGradFromColor color.Color    // "CRUSH" wordmark gradient start
-		LogoGradToColor   color.Color    // "CRUSH" wordmark gradient end
 	}
 
 	CompactDetails struct {
@@ -197,43 +193,6 @@ type Styles struct {
 		Cost             lipgloss.Style // "$0.42" cost readout
 		HypercreditIcon  lipgloss.Style // Hypercredit icon (◆)
 		HypercreditText  lipgloss.Style // Remaining Hypercredits text
-	}
-
-	// Resource styles the LSP/MCP/skills sidebar lists: their heading,
-	// each row's status icon, name, status text, and truncation hints.
-	Resource struct {
-		Heading         lipgloss.Style // Section header ("LSPs", "MCPs", "Skills")
-		Name            lipgloss.Style // Resource name (e.g. "gopls")
-		StatusText      lipgloss.Style // Row status description (e.g. "starting...")
-		OfflineIcon     lipgloss.Style // Offline/unstarted/stopped status icon
-		DisabledIcon    lipgloss.Style // Disabled status icon
-		BusyIcon        lipgloss.Style // Busy/starting status icon
-		ErrorIcon       lipgloss.Style // Error status icon
-		OnlineIcon      lipgloss.Style // Online/ready status icon
-		AdditionalText  lipgloss.Style // "None" and "…and N more" text
-		CapabilityCount lipgloss.Style // "N tools" / "N prompts" / "N resources"
-		RowTitleBase    lipgloss.Style // Base style applied over row titles in common.Status
-		RowDescBase     lipgloss.Style // Base style applied over row descriptions in common.Status
-		DefaultTitleFg  color.Color    // Default title color when opt is zero
-		DefaultDescFg   color.Color    // Default description color when opt is zero
-	}
-
-	// Sidebar
-	Sidebar struct {
-		SessionTitle lipgloss.Style // Current session title at top of sidebar
-		WorkingDir   lipgloss.Style // Working directory path (PrettyPath)
-	}
-
-	// ModelInfo (model name, provider, reasoning, token/cost summary)
-	ModelInfo struct {
-		Icon             lipgloss.Style // Model icon (◇)
-		Name             lipgloss.Style // Model name text
-		Provider         lipgloss.Style // "via <provider>" text
-		ProviderFallback lipgloss.Style // Provider on its own second line
-		Reasoning        lipgloss.Style // Reasoning effort text
-		TokenCount       lipgloss.Style // "(42K)" token count
-		TokenPercentage  lipgloss.Style // "42%" percent of context window
-		Cost             lipgloss.Style // "$0.42" cost readout
 	}
 
 	// Resource styles the LSP/MCP/skills sidebar lists: their heading,
