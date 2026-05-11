@@ -1,8 +1,8 @@
 package config
 
 import (
-	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -126,9 +126,18 @@ func (s *ConfigStore) HasConfigField(scope Scope, key string) bool {
 // After a successful write, it automatically reloads config to keep in-memory
 // state fresh.
 func (s *ConfigStore) SetConfigField(scope Scope, key string, value any) error {
+	return s.SetConfigFields(scope, map[string]any{key: value})
+}
+
+// SetConfigFields sets multiple key/value pairs in the config file for the given
+// scope in a single write. After a successful write, it automatically reloads
+// config to keep in-memory state fresh. This is preferred over multiple
+// SetConfigField calls when writing several fields atomically to avoid
+// intermediate reloads with partial state.
+func (s *ConfigStore) SetConfigFields(scope Scope, kv map[string]any) error {
 	path, err := s.configPath(scope)
 	if err != nil {
-		return fmt.Errorf("%s: %w", key, err)
+		return fmt.Errorf("%v: %w", kv, err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -139,9 +148,12 @@ func (s *ConfigStore) SetConfigField(scope Scope, key string, value any) error {
 		}
 	}
 
-	newValue, err := sjson.Set(string(data), key, value)
-	if err != nil {
-		return fmt.Errorf("failed to set config field %s: %w", key, err)
+	newValue := string(data)
+	for key, value := range kv {
+		newValue, err = sjson.Set(newValue, key, value)
+		if err != nil {
+			return fmt.Errorf("failed to set config field %s: %w", key, err)
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("failed to create config directory %q: %w", path, err)
@@ -237,10 +249,10 @@ func (s *ConfigStore) SetProviderAPIKey(scope Scope, providerID string, apiKey a
 		}
 		setKeyOrToken = func() { providerConfig.APIKey = v }
 	case *oauth.Token:
-		if err := cmp.Or(
-			s.SetConfigField(scope, fmt.Sprintf("providers.%s.api_key", providerID), v.AccessToken),
-			s.SetConfigField(scope, fmt.Sprintf("providers.%s.oauth", providerID), v),
-		); err != nil {
+		if err := s.SetConfigFields(scope, map[string]any{
+			fmt.Sprintf("providers.%s.api_key", providerID): v.AccessToken,
+			fmt.Sprintf("providers.%s.oauth", providerID):   v,
+		}); err != nil {
 			return err
 		}
 		setKeyOrToken = func() {
@@ -288,6 +300,9 @@ func (s *ConfigStore) SetProviderAPIKey(scope Scope, providerID string, apiKey a
 }
 
 // RefreshOAuthToken refreshes the OAuth token for the given provider.
+// Before making an external refresh request, it checks the config file on
+// disk to see if another Crush session has already refreshed the token. If
+// a newer token is found, it is used instead of refreshing.
 func (s *ConfigStore) RefreshOAuthToken(ctx context.Context, scope Scope, providerID string) error {
 	providerConfig, exists := s.config.Providers.Get(providerID)
 	if !exists {
@@ -298,13 +313,29 @@ func (s *ConfigStore) RefreshOAuthToken(ctx context.Context, scope Scope, provid
 		return fmt.Errorf("provider %s does not have an OAuth token", providerID)
 	}
 
-	var newToken *oauth.Token
+	// Check if another session refreshed the token recently by reading
+	// the current token from the config file on disk.
+	newToken, err := s.loadTokenFromDisk(scope, providerID)
+	if err != nil {
+		slog.Warn("Failed to read token from config file, proceeding with refresh", "provider", providerID, "error", err)
+	} else if newToken != nil && newToken.AccessToken != providerConfig.OAuthToken.AccessToken {
+		slog.Info("Using token refreshed by another session", "provider", providerID)
+		providerConfig.OAuthToken = newToken
+		providerConfig.APIKey = newToken.AccessToken
+		if providerID == string(catwalk.InferenceProviderCopilot) {
+			providerConfig.SetupGitHubCopilot()
+		}
+		s.config.Providers.Set(providerID, providerConfig)
+		return nil
+	}
+
+	var refreshedToken *oauth.Token
 	var refreshErr error
 	switch providerID {
 	case string(catwalk.InferenceProviderCopilot):
-		newToken, refreshErr = copilot.RefreshToken(ctx, providerConfig.OAuthToken.RefreshToken)
+		refreshedToken, refreshErr = copilot.RefreshToken(ctx, providerConfig.OAuthToken.RefreshToken)
 	case hyperp.Name:
-		newToken, refreshErr = hyper.ExchangeToken(ctx, providerConfig.OAuthToken.RefreshToken)
+		refreshedToken, refreshErr = hyper.ExchangeToken(ctx, providerConfig.OAuthToken.RefreshToken)
 	default:
 		return fmt.Errorf("OAuth refresh not supported for provider %s", providerID)
 	}
@@ -313,8 +344,8 @@ func (s *ConfigStore) RefreshOAuthToken(ctx context.Context, scope Scope, provid
 	}
 
 	slog.Info("Successfully refreshed OAuth token", "provider", providerID)
-	providerConfig.OAuthToken = newToken
-	providerConfig.APIKey = newToken.AccessToken
+	providerConfig.OAuthToken = refreshedToken
+	providerConfig.APIKey = refreshedToken.AccessToken
 
 	switch providerID {
 	case string(catwalk.InferenceProviderCopilot):
@@ -323,14 +354,49 @@ func (s *ConfigStore) RefreshOAuthToken(ctx context.Context, scope Scope, provid
 
 	s.config.Providers.Set(providerID, providerConfig)
 
-	if err := cmp.Or(
-		s.SetConfigField(scope, fmt.Sprintf("providers.%s.api_key", providerID), newToken.AccessToken),
-		s.SetConfigField(scope, fmt.Sprintf("providers.%s.oauth", providerID), newToken),
-	); err != nil {
+	if err := s.SetConfigFields(scope, map[string]any{
+		fmt.Sprintf("providers.%s.api_key", providerID): refreshedToken.AccessToken,
+		fmt.Sprintf("providers.%s.oauth", providerID):   refreshedToken,
+	}); err != nil {
 		return fmt.Errorf("failed to persist refreshed token: %w", err)
 	}
 
 	return nil
+}
+
+// loadTokenFromDisk reads the OAuth token for the given provider from the
+// config file on disk. Returns nil if the token is not found or matches the
+// current in-memory token.
+func (s *ConfigStore) loadTokenFromDisk(scope Scope, providerID string) (*oauth.Token, error) {
+	path, err := s.configPath(scope)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	oauthKey := fmt.Sprintf("providers.%s.oauth", providerID)
+	oauthResult := gjson.Get(string(data), oauthKey)
+	if !oauthResult.Exists() {
+		return nil, nil
+	}
+
+	var token oauth.Token
+	if err := json.Unmarshal([]byte(oauthResult.Raw), &token); err != nil {
+		return nil, err
+	}
+
+	if token.AccessToken == "" {
+		return nil, nil
+	}
+
+	return &token, nil
 }
 
 // recordRecentModel records a model in the recent models list.
@@ -405,10 +471,10 @@ func (s *ConfigStore) ImportCopilot() (*oauth.Token, bool) {
 		return token, false
 	}
 
-	if err := cmp.Or(
-		s.SetConfigField(ScopeGlobal, "providers.copilot.api_key", token.AccessToken),
-		s.SetConfigField(ScopeGlobal, "providers.copilot.oauth", token),
-	); err != nil {
+	if err := s.SetConfigFields(ScopeGlobal, map[string]any{
+		"providers.copilot.api_key": token.AccessToken,
+		"providers.copilot.oauth":   token,
+	}); err != nil {
 		slog.Error("Unable to save GitHub Copilot token to disk", "error", err)
 	}
 

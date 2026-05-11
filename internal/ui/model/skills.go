@@ -79,6 +79,12 @@ func (m *UI) skillStatusItems() []skillStatusItem {
 		if disabledSet[name] {
 			continue
 		}
+		if _, exists := stateNames[name]; exists {
+			continue
+		}
+		if disabledSet[name] {
+			continue
+		}
 		stateNames[name] = struct{}{}
 		icon := t.Resource.OnlineIcon.String()
 		if state.State == skills.StateError {

@@ -184,13 +184,10 @@ func (c *coordinator) Run(ctx context.Context, sessionID string, prompt string, 
 
 	mergedOptions, temp, topP, topK, freqPenalty, presPenalty := mergeCallOptions(model, providerCfg)
 
-	if providerCfg.OAuthToken != nil && providerCfg.OAuthToken.IsExpired() {
-		slog.Debug("Token needs to be refreshed", "provider", providerCfg.ID)
-		if err := c.refreshOAuth2Token(ctx, providerCfg); err != nil {
-			// NOTE(@andreynering): We don't return here because the event handling to ask the user to reauthenticate
-			// depends on the flow below. If refresh fails, proceed with the token we have.
-			slog.Error("Failed to refresh OAuth2 token. Proceeding with existing token.", "error", err)
-		}
+	if err := c.refreshTokenIfExpired(ctx, providerCfg); err != nil {
+		// NOTE(@andreynering): We don't return here because the event handling to ask the user to reauthenticate
+		// depends on the flow below. If refresh fails, proceed with the token we have.
+		slog.Error("Failed to refresh OAuth2 token. Proceeding with existing token.", "error", err)
 	}
 
 	run := func() (*fantasy.AgentResult, error) {
@@ -212,20 +209,7 @@ func (c *coordinator) Run(ctx context.Context, sessionID string, prompt string, 
 	logTurnSkillUsage(sessionID, prompt, c.activeSkills, c.skillTracker, beforeLoaded)
 
 	if c.isUnauthorized(originalErr) {
-		switch {
-		case providerCfg.OAuthToken != nil:
-			slog.Debug("Received 401. Refreshing token and retrying", "provider", providerCfg.ID)
-			if err := c.refreshOAuth2Token(ctx, providerCfg); err != nil {
-				return nil, originalErr
-			}
-			slog.Debug("Retrying request with refreshed OAuth token", "provider", providerCfg.ID)
-			return run()
-		case strings.Contains(providerCfg.APIKeyTemplate, "$"):
-			slog.Debug("Received 401. Refreshing API Key template and retrying", "provider", providerCfg.ID)
-			if err := c.refreshApiKeyTemplate(ctx, providerCfg); err != nil {
-				return nil, originalErr
-			}
-			slog.Debug("Retrying request with refreshed API key", "provider", providerCfg.ID)
+		if err := c.retryAfterUnauthorized(ctx, providerCfg); err == nil {
 			return run()
 		}
 	}
@@ -281,20 +265,7 @@ func getProviderOptions(model Model, providerCfg config.ProviderConfig) fantasy.
 		return options
 	}
 
-	providerType := providerCfg.Type
-	if providerType == "hyper" {
-		if strings.Contains(model.CatwalkCfg.ID, "claude") {
-			providerType = anthropic.Name
-		} else if strings.Contains(model.CatwalkCfg.ID, "gpt") {
-			providerType = openai.Name
-		} else if strings.Contains(model.CatwalkCfg.ID, "gemini") {
-			providerType = google.Name
-		} else {
-			providerType = openaicompat.Name
-		}
-	}
-
-	switch providerType {
+	switch providerCfg.Type {
 	case openai.Name, azure.Name:
 		_, hasReasoningEffort := mergedOptions["reasoning_effort"]
 		if !hasReasoningEffort && model.ModelCfg.ReasoningEffort != "" {
@@ -374,11 +345,39 @@ func getProviderOptions(model Model, providerCfg config.ProviderConfig) fantasy.
 		if err == nil {
 			options[google.Name] = parsed
 		}
-	case openaicompat.Name:
+	case openaicompat.Name, hyper.Name:
 		_, hasReasoningEffort := mergedOptions["reasoning_effort"]
 		if !hasReasoningEffort && model.ModelCfg.ReasoningEffort != "" {
 			mergedOptions["reasoning_effort"] = model.ModelCfg.ReasoningEffort
 		}
+
+		extraBody := make(map[string]any)
+
+		// "reasoning effort" is a standard OpenAI field, but "thinking" is not.
+		// Setting it in the right way for each provider.
+		// TODO: Abstract this in Fantasy somehow?
+		// TODO: Allow custom providers to specify how to set this?
+		switch providerCfg.ID {
+		case hyper.Name:
+			extraBody["thinking"] = model.ModelCfg.Think
+		case string(catwalk.InferenceProviderIoNet):
+			extraBody["chat_template_kwargs"] = map[string]any{
+				"thinking": model.ModelCfg.Think,
+			}
+		case string(catwalk.InferenceProviderZAI):
+			if model.ModelCfg.Think {
+				extraBody["thinking"] = map[string]any{
+					"type": "enabled",
+				}
+			} else {
+				extraBody["thinking"] = map[string]any{
+					"type": "disabled",
+				}
+			}
+		}
+
+		mergedOptions["extra_body"] = extraBody
+
 		parsed, err := openaicompat.ParseOptions(mergedOptions)
 		if err == nil {
 			options[openaicompat.Name] = parsed
@@ -627,10 +626,12 @@ func (c *coordinator) buildAgentModels(ctx context.Context, isSubAgent bool) (Mo
 			Model:      largeModel,
 			CatwalkCfg: *largeCatwalkModel,
 			ModelCfg:   largeModelCfg,
+			FlatRate:   largeProviderCfg.FlatRate,
 		}, Model{
 			Model:      smallModel,
 			CatwalkCfg: *smallCatwalkModel,
 			ModelCfg:   smallModelCfg,
+			FlatRate:   smallProviderCfg.FlatRate,
 		}, nil
 }
 
@@ -946,7 +947,47 @@ func (c *coordinator) Summarize(ctx context.Context, sessionID string) error {
 	if !ok {
 		return errModelProviderNotConfigured
 	}
-	return c.currentAgent.Summarize(ctx, sessionID, getProviderOptions(c.currentAgent.Model(), providerCfg))
+
+	if err := c.refreshTokenIfExpired(ctx, providerCfg); err != nil {
+		slog.Error("Failed to refresh OAuth2 token before summarize. Proceeding with existing token.", "error", err)
+	}
+
+	summarize := func() error {
+		return c.currentAgent.Summarize(ctx, sessionID, getProviderOptions(c.currentAgent.Model(), providerCfg))
+	}
+
+	err := summarize()
+	if err != nil && c.isUnauthorized(err) {
+		if retryErr := c.retryAfterUnauthorized(ctx, providerCfg); retryErr == nil {
+			return summarize()
+		}
+	}
+
+	return err
+}
+
+// refreshTokenIfExpired proactively refreshes the OAuth token if it has expired.
+func (c *coordinator) refreshTokenIfExpired(ctx context.Context, providerCfg config.ProviderConfig) error {
+	if providerCfg.OAuthToken == nil || !providerCfg.OAuthToken.IsExpired() {
+		return nil
+	}
+	slog.Debug("Token needs to be refreshed", "provider", providerCfg.ID)
+	return c.refreshOAuth2Token(ctx, providerCfg)
+}
+
+// retryAfterUnauthorized attempts to refresh credentials after receiving a 401
+// and returns nil if retry should be attempted.
+func (c *coordinator) retryAfterUnauthorized(ctx context.Context, providerCfg config.ProviderConfig) error {
+	switch {
+	case providerCfg.OAuthToken != nil:
+		slog.Debug("Received 401. Refreshing token and retrying", "provider", providerCfg.ID)
+		return c.refreshOAuth2Token(ctx, providerCfg)
+	case strings.Contains(providerCfg.APIKeyTemplate, "$"):
+		slog.Debug("Received 401. Refreshing API Key template and retrying", "provider", providerCfg.ID)
+		return c.refreshApiKeyTemplate(ctx, providerCfg)
+	default:
+		return nil
+	}
 }
 
 func (c *coordinator) isUnauthorized(err error) bool {
@@ -1036,7 +1077,7 @@ func (c *coordinator) runSubAgent(ctx context.Context, params subAgentParams) (f
 		NonInteractive:   true,
 	})
 	if err != nil {
-		return fantasy.NewTextErrorResponse("error generating response"), nil
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("Failed to generate response: %s", err)), nil
 	}
 
 	// Update parent session cost

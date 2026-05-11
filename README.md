@@ -169,7 +169,7 @@ go install github.com/charmbracelet/crush@latest
 > [!WARNING]
 > Productivity may increase when using Crush and you may find yourself nerd
 > sniped when first using the application. If the symptoms persist, join the
-> [Slack][slack] or [Discord][discord] and nerd snipe the rest of us.
+> [Slack][slack] or [Slack][slack] or [Discord][discord] and nerd snipe the rest of us.
 
 ## Getting Started
 
@@ -181,6 +181,7 @@ That said, you can also set environment variables for preferred providers.
 
 | Environment Variable        | Provider                                           |
 | --------------------------- | -------------------------------------------------- |
+| `HYPER_API_KEY`             | Charm Hyper                                        |
 | `ANTHROPIC_API_KEY`         | Anthropic                                          |
 | `OPENAI_API_KEY`            | OpenAI                                             |
 | `VERCEL_API_KEY`            | Vercel AI Gateway                                  |
@@ -292,10 +293,36 @@ like you would. LSPs can be added manually like so:
 
 ### MCPs
 
-Crush also supports Model Context Protocol (MCP) servers through three
-transport types: `stdio` for command-line servers, `http` for HTTP endpoints,
-and `sse` for Server-Sent Events. Environment variable expansion is supported
-using `$(echo $VAR)` syntax.
+Crush also supports Model Context Protocol (MCP) servers through three transport
+types: `stdio` for command-line servers, `http` for HTTP endpoints, and `sse`
+for Server-Sent Events.
+
+Shell-style value expansion (`$VAR`, `${VAR:-default}`, `$(command)`, quoting,
+nesting) works in `command`, `args`, `env`, `headers`, and `url`, so
+file-based secrets work out of the box. You can use values like `"$TOKEN"`
+or `"$(cat /path/to/secret/token)"`. Expansion runs through Crush's embedded
+shell, so the same syntax works on every supported system, Windows included.
+
+Unset variables expand to the empty string by default, matching bash. For
+required credentials, use `${VAR:?message}` so an unset variable fails loudly
+at load time with `message` instead of silently resolving to empty:
+
+```json
+{ "api_key": "${CODEBERG_TOKEN:?set CODEBERG_TOKEN}" }
+```
+
+Headers (both MCP `headers` and provider `extra_headers`) whose value
+resolves to the empty string are dropped from the outgoing request rather
+than sent as `Header:`. That keeps optional env-gated headers like
+`"OpenAI-Organization": "$OPENAI_ORG_ID"` clean when the variable is unset.
+
+Provider `extra_body` is a non-expanding JSON passthrough; put env-driven
+values in `extra_headers` or the provider's `api_key` / `base_url`, all of
+which do expand.
+
+> **Security note:** `crush.json` is trusted code. Any `$(...)` in it runs at
+> load time with your shell's privileges, before the UI appears. Don't launch
+> Crush in a directory whose `crush.json` you haven't reviewed.
 
 ```json
 {
@@ -379,6 +406,11 @@ The first version focuses on a reliable text bridge:
 > `crush bot wecom` runs unattended. Use `--yolo` or set
 > `bots.wecom.auto_approve_permissions=true`, otherwise tool permission prompts can
 > block replies.
+
+### Hooks
+
+Crush has preliminary support for hooks. For details, see
+[the hook guide](./docs/hooks/).
 
 ### Hooks
 

@@ -109,10 +109,6 @@
           },
           "type": "object",
           "description": "User-defined shell commands that fire on hook events (e.g. PreToolUse)"
-        },
-        "bots": {
-          "$ref": "#/$defs/BotsConfig",
-          "description": "Bot bridge configurations"
         }
       },
       "additionalProperties": false,
@@ -601,6 +597,10 @@
         "provider_options": {
           "type": "object",
           "description": "Additional provider-specific options for this provider"
+        },
+        "flat_rate": {
+          "type": "boolean",
+          "description": "Flat-rate mode for this provider"
         },
         "models": {
           "items": {
