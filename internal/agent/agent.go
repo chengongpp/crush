@@ -119,6 +119,7 @@ type sessionAgent struct {
 	disableAutoSummarize bool
 	isYolo               bool
 	notify               pubsub.Publisher[notify.Notification]
+	toolContext          *tools.ToolContext
 
 	messageQueue   *csync.Map[string, []SessionAgentCall]
 	activeRequests *csync.Map[string, context.CancelFunc]
@@ -136,6 +137,7 @@ type SessionAgentOptions struct {
 	Messages             message.Service
 	Tools                []fantasy.AgentTool
 	Notify               pubsub.Publisher[notify.Notification]
+	ToolContext          *tools.ToolContext
 }
 
 func NewSessionAgent(
@@ -153,6 +155,7 @@ func NewSessionAgent(
 		tools:                csync.NewSliceFrom(opts.Tools),
 		isYolo:               opts.IsYolo,
 		notify:               opts.Notify,
+		toolContext:          opts.ToolContext,
 		messageQueue:         csync.NewMap[string, []SessionAgentCall](),
 		activeRequests:       csync.NewMap[string, context.CancelFunc](),
 	}
@@ -323,6 +326,9 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 			callContext = context.WithValue(callContext, tools.MessageIDContextKey, assistantMsg.ID)
 			callContext = context.WithValue(callContext, tools.SupportsImagesContextKey, largeModel.CatwalkCfg.SupportsImages)
 			callContext = context.WithValue(callContext, tools.ModelNameContextKey, largeModel.CatwalkCfg.Name)
+			if a.toolContext != nil {
+				callContext = tools.WithToolContext(callContext, a.toolContext)
+			}
 			currentAssistant = &assistantMsg
 			return callContext, prepared, err
 		},

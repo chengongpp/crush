@@ -1,0 +1,1 @@
+List all tasks in the current session with their status indicators. Use this to see your overall progress and identify which tasks are available to work on (not blocked) or which blockers need to be resolved.

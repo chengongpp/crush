@@ -1,0 +1,1 @@
+Create a new task to track progress on a multi-step coding task. Use this to organize your work when you have multiple distinct steps to complete. Each task should have a clear, actionable subject and a description of what needs to be done. Tasks can be linked via blocks/blockedBy to create dependency chains.

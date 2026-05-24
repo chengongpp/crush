@@ -23,6 +23,7 @@ import (
 	"github.com/charmbracelet/crush/internal/agent/prompt"
 	"github.com/charmbracelet/crush/internal/agent/tools"
 	"github.com/charmbracelet/crush/internal/config"
+	"github.com/charmbracelet/crush/internal/agent/filestatecache"
 	"github.com/charmbracelet/crush/internal/event"
 	"github.com/charmbracelet/crush/internal/filetracker"
 	"github.com/charmbracelet/crush/internal/history"
@@ -96,6 +97,12 @@ type coordinator struct {
 	activeSkills []*skills.Skill // Post-filter: active skills only.
 	skillTracker *skills.Tracker
 
+	// Session-level context cache (git status, context files).
+	sessionCtx *SessionContext
+
+	// File state cache shared across agent turns.
+	fileStateCache *filestatecache.Cache
+
 	readyWg errgroup.Group
 }
 
@@ -146,7 +153,26 @@ func NewCoordinator(
 	}
 	c.currentAgent = agent
 	c.agents[config.AgentCoder] = agent
+
+	// Fire SessionStart hooks (best-effort, logged on failure).
+	c.fireSessionStart(ctx)
 	return c, nil
+}
+
+
+// fireSessionStart runs SessionStart hooks configured in crush.json. These
+// hooks run once when the coordinator initializes, before any user message.
+// Errors are logged but do not prevent the coordinator from starting.
+func (c *coordinator) fireSessionStart(ctx context.Context) {
+	hookCfgs := c.cfg.Config().Hooks[hooks.EventSessionStart]
+	if len(hookCfgs) == 0 {
+		return
+	}
+	runner := hooks.NewRunner(hookCfgs, c.cfg.WorkingDir(), c.cfg.WorkingDir())
+	_, err := runner.Run(ctx, hooks.EventSessionStart, "", "", "{}")
+	if err != nil {
+		slog.Warn("SessionStart hook failed", "error", err)
+	}
 }
 
 // Run implements Coordinator.
@@ -439,6 +465,41 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 	return result, nil
 }
 
+// newToolContext builds a ToolContext from the coordinator's dependencies
+// and memoized session context, for injection into tool execution.
+func (c *coordinator) newToolContext(modelID string) *tools.ToolContext {
+	var lsCfg config.ToolLs
+	var grepCfg config.ToolGrep
+	var attr *config.Attribution
+	var skillsPaths []string
+	if opts := c.cfg.Config().Options; opts != nil {
+		lsCfg = c.cfg.Config().Tools.Ls
+		grepCfg = c.cfg.Config().Tools.Grep
+		attr = opts.Attribution
+		skillsPaths = opts.SkillsPaths
+	}
+	return &tools.ToolContext{
+		WorkingDir:     c.cfg.WorkingDir(),
+		Permissions:    c.permissions,
+		LSPManager:     c.lspManager,
+		FileTracker:    c.filetracker,
+		History:        c.history,
+		Sessions:       c.sessions,
+		Config:         c.cfg,
+		AllSkills:      c.allSkills,
+		ActiveSkills:   c.activeSkills,
+		SkillTracker:   c.skillTracker,
+		Attribution:    attr,
+		ModelID:        modelID,
+		LsConfig:       lsCfg,
+		GrepConfig:     grepCfg,
+		SkillsPaths:    skillsPaths,
+		UserContext:    c.sessionCtx.UserContext(),
+		SystemContext:  c.sessionCtx.GitStatus(),
+		FileStateCache: c.fileStateCache,
+	}
+}
+
 func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubAgent bool) ([]fantasy.AgentTool, error) {
 	var allTools []fantasy.AgentTool
 	if slices.Contains(agent.AllowedTools, AgentToolName) {
@@ -538,6 +599,16 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 	slices.SortFunc(filteredTools, func(a, b fantasy.AgentTool) int {
 		return strings.Compare(a.Info().Name, b.Info().Name)
 	})
+
+	// Mark read-only tools as safe for parallel execution by the
+	// fantasy agent loop. Parallel tools run concurrently within a step
+	// (read-only batch), reducing wall-clock time when the model issues
+	// multiple independent lookups (e.g. Grep + Glob + Ls).
+	for _, tool := range filteredTools {
+		if isReadOnlyTool(tool.Info().Name) {
+			tools.SetParallel(tool, true)
+		}
+	}
 
 	// Wrap tools with hook interception for the top-level agent only.
 	// Sub-agents (the `agent` task tool, `agentic_fetch`, etc.) run
@@ -875,6 +946,23 @@ func (c *coordinator) buildProvider(providerCfg config.ProviderConfig, model con
 		return c.buildOpenaiCompatProvider(baseURL, apiKey, headers, providerCfg.ExtraBody, providerCfg.ID, isSubAgent)
 	default:
 		return nil, fmt.Errorf("provider type not supported: %q", providerCfg.Type)
+	}
+}
+
+// isReadOnlyTool reports whether a tool is read-only (no side effects).
+// Read-only tools are safe for parallel execution by the fantasy agent loop.
+func isReadOnlyTool(name string) bool {
+	switch name {
+	case "glob", "grep", "ls", "view",
+		"sourcegraph",
+		"lsp_diagnostics", "lsp_references",
+		"list_mcp_resources", "read_mcp_resource",
+		"crush_info", "crush_logs",
+		"job_output",
+		"task_get", "task_list":
+		return true
+	default:
+		return false
 	}
 }
 

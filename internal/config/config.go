@@ -704,6 +704,10 @@ func allToolNames() []string {
 		"write",
 		"list_mcp_resources",
 		"read_mcp_resource",
+		"task_create",
+		"task_get",
+		"task_list",
+		"task_update",
 	}
 }
 
