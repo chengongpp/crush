@@ -21,15 +21,17 @@ const SupportedOutputVersion = 1
 // Claude Code hooks (which expect tool_input to be an object, not a
 // string).
 type Payload struct {
-	Event     string          `json:"event"`
-	SessionID string          `json:"session_id"`
-	CWD       string          `json:"cwd"`
-	ToolName  string          `json:"tool_name"`
-	ToolInput json.RawMessage `json:"tool_input"`
+	Event      string          `json:"event"`
+	SessionID  string          `json:"session_id"`
+	CWD        string          `json:"cwd"`
+	ToolName   string          `json:"tool_name"`
+	ToolInput  json.RawMessage `json:"tool_input"`
+	ToolOutput json.RawMessage `json:"tool_output,omitempty"`
 }
 
 // BuildPayload constructs the JSON stdin payload for a hook command.
-func BuildPayload(eventName, sessionID, cwd, toolName, toolInputJSON string) []byte {
+// toolOutputJSON is only included for PostToolUse events.
+func BuildPayload(eventName, sessionID, cwd, toolName, toolInputJSON string, toolOutputJSON ...string) []byte {
 	toolInput := json.RawMessage(toolInputJSON)
 	if !json.Valid(toolInput) {
 		toolInput = json.RawMessage("{}")
@@ -40,6 +42,9 @@ func BuildPayload(eventName, sessionID, cwd, toolName, toolInputJSON string) []b
 		CWD:       cwd,
 		ToolName:  toolName,
 		ToolInput: toolInput,
+	}
+	if len(toolOutputJSON) > 0 && toolOutputJSON[0] != "" {
+		p.ToolOutput = json.RawMessage(toolOutputJSON[0])
 	}
 	data, err := json.Marshal(p)
 	if err != nil {

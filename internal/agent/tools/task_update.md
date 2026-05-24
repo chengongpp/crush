@@ -1,0 +1,1 @@
+Update a task's status, fields, or dependencies. Use status "in_progress" when starting work, "completed" when done. Use addBlocks/addBlockedBy to manage task dependencies. Tasks can be marked for deletion by setting status to "deleted".

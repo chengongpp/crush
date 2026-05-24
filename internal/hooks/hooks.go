@@ -12,7 +12,15 @@ import (
 
 // Hook event name constants.
 const (
-	EventPreToolUse = "PreToolUse"
+	EventPreToolUse         = "PreToolUse"
+	EventPostToolUse        = "PostToolUse"
+	EventPostToolUseFailure = "PostToolUseFailure"
+	EventSessionStart       = "SessionStart"
+	EventStop               = "Stop"
+	EventUserPromptSubmit   = "UserPromptSubmit"
+	EventNotification       = "Notification"
+	EventPreCompact         = "PreCompact"
+	EventPostCompact        = "PostCompact"
 )
 
 // HaltExitCode is the exit code that halts the whole turn. 2 blocks the
