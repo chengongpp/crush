@@ -62,6 +62,8 @@ type App struct {
 
 	LSPManager *lsp.Manager
 
+	Skills *skills.Manager
+
 	config *config.ConfigStore
 
 	serviceEventsWG *sync.WaitGroup
@@ -75,8 +77,11 @@ type App struct {
 	agentNotifications *pubsub.Broker[notify.Notification]
 }
 
-// New initializes a new application instance.
-func New(ctx context.Context, conn *sql.DB, store *config.ConfigStore) (*App, error) {
+// New initializes a new application instance. skillsMgr carries the
+// per-workspace skill discovery results computed by the caller; the
+// caller is responsible for constructing it (typically via
+// skills.NewManager + skills.DiscoverFromConfig).
+func New(ctx context.Context, conn *sql.DB, store *config.ConfigStore, skillsMgr *skills.Manager) (*App, error) {
 	q := db.New(conn)
 	sessions := session.NewService(q, conn)
 	messages := message.NewService(q)
@@ -95,6 +100,7 @@ func New(ctx context.Context, conn *sql.DB, store *config.ConfigStore) (*App, er
 		Permissions: permission.NewPermissionService(store.WorkingDir(), skipPermissionsRequests, allowedTools),
 		FileTracker: filetracker.NewService(q),
 		LSPManager:  lsp.NewManager(store),
+		Skills:      skillsMgr,
 
 		globalCtx: ctx,
 
@@ -113,10 +119,12 @@ func New(ctx context.Context, conn *sql.DB, store *config.ConfigStore) (*App, er
 
 	go mcp.Initialize(ctx, app.Permissions, store)
 
-	// cleanup database upon app shutdown
+	// Release the shared database connection on shutdown. The pool
+	// closes the underlying *sql.DB when the last reference is released.
+	dataDir := cfg.Options.DataDirectory
 	app.cleanupFuncs = append(
 		app.cleanupFuncs,
-		func(context.Context) error { return conn.Close() },
+		func(context.Context) error { return db.Release(dataDir) },
 		func(ctx context.Context) error { return mcp.Close(ctx) },
 	)
 
@@ -479,7 +487,9 @@ func (app *App) setupEvents() {
 	setupSubscriber(ctx, app.serviceEventsWG, "agent-notifications", app.agentNotifications.Subscribe, app.events)
 	setupSubscriber(ctx, app.serviceEventsWG, "mcp", mcp.SubscribeEvents, app.events)
 	setupSubscriber(ctx, app.serviceEventsWG, "lsp", SubscribeLSPEvents, app.events)
-	setupSubscriber(ctx, app.serviceEventsWG, "skills", skills.SubscribeEvents, app.events)
+	if app.Skills != nil {
+		setupSubscriber(ctx, app.serviceEventsWG, "skills", app.Skills.SubscribeEvents, app.events)
+	}
 	cleanupFunc := func(context.Context) error {
 		cancel()
 		app.serviceEventsWG.Wait()
@@ -530,6 +540,7 @@ func (app *App) InitCoderAgent(ctx context.Context) error {
 		app.FileTracker,
 		app.LSPManager,
 		app.agentNotifications,
+		app.Skills,
 	)
 	if err != nil {
 		slog.Error("Failed to create coder agent", "err", err)
@@ -582,12 +593,22 @@ func (app *App) Shutdown() {
 		app.AgentCoordinator.CancelAll()
 	}
 
-	// Now run remaining cleanup tasks in parallel.
-	var wg sync.WaitGroup
-
 	// Shared shutdown context for all timeout-bounded cleanup.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
+	// Drain any debounced message updates before the DB-close cleanup
+	// runs in the parallel block below. message.Service buffers
+	// streaming deltas (see internal/message/message.go) and we must
+	// land them while the connection is still open.
+	if app.Messages != nil {
+		if err := app.Messages.FlushAll(shutdownCtx); err != nil {
+			slog.Error("Failed to flush pending message updates on shutdown", "error", err)
+		}
+	}
+
+	// Now run remaining cleanup tasks in parallel.
+	var wg sync.WaitGroup
 
 	// Send exit event
 	wg.Go(func() {
