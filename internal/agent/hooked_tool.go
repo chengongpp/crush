@@ -84,6 +84,10 @@ func (h *hookedTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	}
 
 	resp, err := h.inner.Run(ctx, call)
+
+	// Run PostToolUse hooks regardless of success/failure.
+	h.runPostHooks(ctx, call, resp, err)
+
 	if err != nil {
 		return resp, err
 	}
@@ -97,6 +101,26 @@ func (h *hookedTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 
 	resp.Metadata = mergeHookMetadata(resp.Metadata, result)
 	return resp, nil
+}
+
+// runPostHooks executes PostToolUse or PostToolUseFailure hooks after tool
+// execution. Errors from hooks are logged but never block the tool result.
+func (h *hookedTool) runPostHooks(ctx context.Context, call fantasy.ToolCall, resp fantasy.ToolResponse, toolErr error) {
+	sessionID := tools.GetSessionFromContext(ctx)
+	event := hooks.EventPostToolUse
+	if toolErr != nil || resp.IsError {
+		event = hooks.EventPostToolUseFailure
+	}
+	outputJSON, _ := json.Marshal(map[string]any{
+		"content":  resp.Content,
+		"is_error": resp.IsError,
+		"metadata": resp.Metadata,
+	})
+	_, hookErr := h.runner.RunPostToolUse(ctx, event, sessionID, call.Name, call.Input, string(outputJSON))
+	if hookErr != nil {
+		slog.Warn("PostToolUse hook execution error",
+			"tool", call.Name, "error", hookErr)
+	}
 }
 
 // buildHookMetadata creates a HookMetadata from an AggregateResult.

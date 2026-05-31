@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"html/template"
+	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"testing"
 
 	"charm.land/fantasy"
@@ -67,6 +70,39 @@ func NewPermissionDeniedResponse() fantasy.ToolResponse {
 	resp := fantasy.NewTextErrorResponse("User denied permission")
 	resp.StopTurn = true
 	return resp
+}
+
+// WrapInSystemReminder wraps content in <system-reminder> tags, matching
+// the claude-code convention for system-injected context that should not
+// be confused with user input.
+func WrapInSystemReminder(content string) string {
+	return "<system-reminder>\n" + content + "\n</system-reminder>"
+}
+
+// SetParallel sets the Parallel flag on a tool if the underlying
+// implementation supports it (i.e., was created with NewAgentTool or
+// NewParallelAgentTool). Wrapped tools (e.g. hookedTool) delegate to
+// their inner tool. This is a best-effort operation.
+func SetParallel(tool fantasy.AgentTool, parallel bool) {
+	type parallelSetter interface {
+		SetParallel(bool)
+	}
+	if setter, ok := tool.(parallelSetter); ok {
+		setter.SetParallel(parallel)
+	}
+}
+
+// FirstLineDescription returns just the first non-empty line from the embedded
+// markdown description. The full description can be used by setting
+// CRUSH_SHORT_TOOL_DESCRIPTIONS=0.
+func FirstLineDescription(content []byte) string {
+	if !testing.Testing() {
+		if v, err := strconv.ParseBool(os.Getenv("CRUSH_SHORT_TOOL_DESCRIPTIONS")); err == nil && !v {
+			return strings.TrimSpace(string(content))
+		}
+	}
+	firstLine, _, _ := bytes.Cut(content, []byte("\n"))
+	return strings.TrimSpace(string(firstLine))
 }
 
 // ghAvailable indicates whether the `gh` CLI is available on PATH.

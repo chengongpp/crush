@@ -185,6 +185,9 @@ func TestConfig_setDefaults(t *testing.T) {
 		for _, path := range defaultContextPaths {
 			require.Contains(t, cfg.Options.ContextPaths, path)
 		}
+		require.NotNil(t, cfg.Bots)
+		require.NotNil(t, cfg.Bots.WeCom)
+		require.Equal(t, "wss://openws.work.weixin.qq.com", cfg.Bots.WeCom.WebSocketURL)
 	})
 
 	t.Run("resolves relative configured data directory from working directory", func(t *testing.T) {
@@ -297,6 +300,25 @@ func TestConfig_setDefaults(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, filepath.Join(subEval, defaultDataDirectory), gotEval)
 	})
+
+}
+
+func TestConfig_setDefaultsMigratesLegacyWeComConfig(t *testing.T) {
+	cfg := &Config{
+		WeCom: &WeComConfig{
+			BotID:                  "legacy-bot",
+			Secret:                 "legacy-secret",
+			AutoApprovePermissions: true,
+		},
+	}
+
+	cfg.setDefaults("/tmp", "")
+
+	require.NotNil(t, cfg.Bots)
+	require.NotNil(t, cfg.Bots.WeCom)
+	require.Equal(t, "legacy-bot", cfg.Bots.WeCom.BotID)
+	require.Equal(t, "legacy-secret", cfg.Bots.WeCom.Secret)
+	require.True(t, cfg.Bots.WeCom.AutoApprovePermissions)
 }
 
 func TestConfig_configureProviders(t *testing.T) {
@@ -706,7 +728,7 @@ func TestConfig_setupAgentsWithDisabledTools(t *testing.T) {
 	coderAgent, ok := cfg.Agents[AgentCoder]
 	require.True(t, ok)
 
-	assert.Equal(t, []string{"agent", "bash", "crush_info", "crush_logs", "job_output", "job_kill", "multiedit", "lsp_diagnostics", "lsp_references", "lsp_restart", "fetch", "agentic_fetch", "glob", "ls", "sourcegraph", "todos", "view", "write", "list_mcp_resources", "read_mcp_resource"}, coderAgent.AllowedTools)
+	assert.Equal(t, []string{"agent", "bash", "crush_info", "crush_logs", "job_output", "job_kill", "multiedit", "lsp_diagnostics", "lsp_references", "lsp_restart", "fetch", "agentic_fetch", "glob", "ls", "sourcegraph", "todos", "view", "write", "list_mcp_resources", "read_mcp_resource", "task_create", "task_get", "task_list", "task_update"}, coderAgent.AllowedTools)
 
 	taskAgent, ok := cfg.Agents[AgentTask]
 	require.True(t, ok)
@@ -729,7 +751,7 @@ func TestConfig_setupAgentsWithEveryReadOnlyToolDisabled(t *testing.T) {
 	cfg.SetupAgents()
 	coderAgent, ok := cfg.Agents[AgentCoder]
 	require.True(t, ok)
-	assert.Equal(t, []string{"agent", "bash", "crush_info", "crush_logs", "job_output", "job_kill", "download", "edit", "multiedit", "lsp_diagnostics", "lsp_references", "lsp_restart", "fetch", "agentic_fetch", "todos", "write", "list_mcp_resources", "read_mcp_resource"}, coderAgent.AllowedTools)
+	assert.Equal(t, []string{"agent", "bash", "crush_info", "crush_logs", "job_output", "job_kill", "download", "edit", "multiedit", "lsp_diagnostics", "lsp_references", "lsp_restart", "fetch", "agentic_fetch", "todos", "write", "list_mcp_resources", "read_mcp_resource", "task_create", "task_get", "task_list", "task_update"}, coderAgent.AllowedTools)
 
 	taskAgent, ok := cfg.Agents[AgentTask]
 	require.True(t, ok)

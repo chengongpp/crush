@@ -23,6 +23,7 @@ import (
 	"github.com/charmbracelet/crush/internal/agent/prompt"
 	"github.com/charmbracelet/crush/internal/agent/tools"
 	"github.com/charmbracelet/crush/internal/config"
+	"github.com/charmbracelet/crush/internal/agent/filestatecache"
 	"github.com/charmbracelet/crush/internal/event"
 	"github.com/charmbracelet/crush/internal/filetracker"
 	"github.com/charmbracelet/crush/internal/history"
@@ -66,8 +67,15 @@ var copilotResponsesModels = map[string]bool{
 	"gpt-5.2":       true,
 	"gpt-5.2-codex": true,
 	"gpt-5.3-codex": true,
+	"gpt-5.4":       true,
 	"gpt-5.4-mini":  true,
+	"gpt-5.5":       true,
 	"gpt-5-mini":    true,
+}
+
+// OpenCode models that user Anthropic Messages API instead of Chat Completions.
+var opencodeMessagesModels = map[string]bool{
+	"qwen3.7-max": true,
 }
 
 type Coordinator interface {
@@ -95,6 +103,7 @@ type coordinator struct {
 	filetracker filetracker.Service
 	lspManager  *lsp.Manager
 	notify      pubsub.Publisher[notify.Notification]
+	runComplete pubsub.Publisher[notify.RunComplete]
 
 	currentAgent SessionAgent
 	agents       map[string]SessionAgent
@@ -103,6 +112,12 @@ type coordinator struct {
 	allSkills    []*skills.Skill // Pre-filter: all discovered after dedup.
 	activeSkills []*skills.Skill // Post-filter: active skills only.
 	skillTracker *skills.Tracker
+
+	// Session-level context cache (git status, context files).
+	sessionCtx *SessionContext
+
+	// File state cache shared across agent turns.
+	fileStateCache *filestatecache.Cache
 
 	readyWg errgroup.Group
 }
@@ -117,6 +132,7 @@ func NewCoordinator(
 	filetracker filetracker.Service,
 	lspManager *lsp.Manager,
 	notify pubsub.Publisher[notify.Notification],
+	runComplete pubsub.Publisher[notify.RunComplete],
 	skillsMgr *skills.Manager,
 ) (Coordinator, error) {
 	// Skills are pre-discovered by the caller (see app.New /
@@ -141,6 +157,7 @@ func NewCoordinator(
 		filetracker:  filetracker,
 		lspManager:   lspManager,
 		notify:       notify,
+		runComplete:  runComplete,
 		agents:       make(map[string]SessionAgent),
 		allSkills:    allSkills,
 		activeSkills: activeSkills,
@@ -164,7 +181,26 @@ func NewCoordinator(
 	}
 	c.currentAgent = agent
 	c.agents[config.AgentCoder] = agent
+
+	// Fire SessionStart hooks (best-effort, logged on failure).
+	c.fireSessionStart(ctx)
 	return c, nil
+}
+
+
+// fireSessionStart runs SessionStart hooks configured in crush.json. These
+// hooks run once when the coordinator initializes, before any user message.
+// Errors are logged but do not prevent the coordinator from starting.
+func (c *coordinator) fireSessionStart(ctx context.Context) {
+	hookCfgs := c.cfg.Config().Hooks[hooks.EventSessionStart]
+	if len(hookCfgs) == 0 {
+		return
+	}
+	runner := hooks.NewRunner(hookCfgs, c.cfg.WorkingDir(), c.cfg.WorkingDir())
+	_, err := runner.Run(ctx, hooks.EventSessionStart, "", "", "{}")
+	if err != nil {
+		slog.Warn("SessionStart hook failed", "error", err)
+	}
 }
 
 // Run implements Coordinator.
@@ -208,9 +244,34 @@ func (c *coordinator) Run(ctx context.Context, sessionID string, prompt string, 
 		slog.Error("Failed to refresh OAuth2 token. Proceeding with existing token.", "error", err)
 	}
 
+	// Coalesce per-attempt RunComplete payloads so only the final
+	// outcome reaches subscribers. Without this, the first attempt's
+	// failed RunComplete (unauthorized) would race ahead of the
+	// retry's success, and `crush run` would exit on the stale error
+	// before ever seeing the retry result. Each attempt's
+	// SessionAgentCall.OnComplete hook overwrites latest; we publish
+	// exactly once after retries resolve, via PublishMustDeliver, so
+	// a momentarily-full subscriber buffer can't silently drop the
+	// terminal event.
+	var (
+		latest    notify.RunComplete
+		hasLatest bool
+	)
+	onComplete := func(rc notify.RunComplete) {
+		latest = rc
+		hasLatest = true
+	}
+	// Propagate the caller-supplied RunID (set via agent.WithRunID
+	// at the HTTP boundary in backend.SendMessage) onto the
+	// SessionAgentCall so the terminal RunComplete event echoes it
+	// back. Both attempts in the retry chain reuse the same RunID;
+	// the coalesce closure publishes the final outcome under that
+	// same correlator.
+	runID := RunIDFromContext(ctx)
 	run := func() (*fantasy.AgentResult, error) {
 		return c.currentAgent.Run(ctx, SessionAgentCall{
 			SessionID:        sessionID,
+			RunID:            runID,
 			Prompt:           prompt,
 			Attachments:      attachments,
 			MaxOutputTokens:  maxTokens,
@@ -220,6 +281,7 @@ func (c *coordinator) Run(ctx context.Context, sessionID string, prompt string, 
 			TopK:             topK,
 			FrequencyPenalty: freqPenalty,
 			PresencePenalty:  presPenalty,
+			OnComplete:       onComplete,
 		})
 	}
 	beforeLoaded := c.skillTracker.LoadedNames()
@@ -228,10 +290,13 @@ func (c *coordinator) Run(ctx context.Context, sessionID string, prompt string, 
 
 	if c.isUnauthorized(originalErr) {
 		if err := c.retryAfterUnauthorized(ctx, providerCfg); err == nil {
-			return run()
+			result, originalErr = run()
 		}
 	}
 
+	if hasLatest && c.runComplete != nil {
+		c.runComplete.PublishMustDeliver(ctx, pubsub.UpdatedEvent, latest)
+	}
 	return result, originalErr
 }
 
@@ -450,6 +515,7 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 		Messages:             c.messages,
 		Tools:                nil,
 		Notify:               c.notify,
+		RunComplete:          c.runComplete,
 	})
 
 	c.readyWg.Go(func() error {
@@ -471,6 +537,41 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 	})
 
 	return result, nil
+}
+
+// newToolContext builds a ToolContext from the coordinator's dependencies
+// and memoized session context, for injection into tool execution.
+func (c *coordinator) newToolContext(modelID string) *tools.ToolContext {
+	var lsCfg config.ToolLs
+	var grepCfg config.ToolGrep
+	var attr *config.Attribution
+	var skillsPaths []string
+	if opts := c.cfg.Config().Options; opts != nil {
+		lsCfg = c.cfg.Config().Tools.Ls
+		grepCfg = c.cfg.Config().Tools.Grep
+		attr = opts.Attribution
+		skillsPaths = opts.SkillsPaths
+	}
+	return &tools.ToolContext{
+		WorkingDir:     c.cfg.WorkingDir(),
+		Permissions:    c.permissions,
+		LSPManager:     c.lspManager,
+		FileTracker:    c.filetracker,
+		History:        c.history,
+		Sessions:       c.sessions,
+		Config:         c.cfg,
+		AllSkills:      c.allSkills,
+		ActiveSkills:   c.activeSkills,
+		SkillTracker:   c.skillTracker,
+		Attribution:    attr,
+		ModelID:        modelID,
+		LsConfig:       lsCfg,
+		GrepConfig:     grepCfg,
+		SkillsPaths:    skillsPaths,
+		UserContext:    c.sessionCtx.UserContext(),
+		SystemContext:  c.sessionCtx.GitStatus(),
+		FileStateCache: c.fileStateCache,
+	}
 }
 
 func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubAgent bool) ([]fantasy.AgentTool, error) {
@@ -573,6 +674,16 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 	slices.SortFunc(filteredTools, func(a, b fantasy.AgentTool) int {
 		return strings.Compare(a.Info().Name, b.Info().Name)
 	})
+
+	// Mark read-only tools as safe for parallel execution by the
+	// fantasy agent loop. Parallel tools run concurrently within a step
+	// (read-only batch), reducing wall-clock time when the model issues
+	// multiple independent lookups (e.g. Grep + Glob + Ls).
+	for _, tool := range filteredTools {
+		if isReadOnlyTool(tool.Info().Name) {
+			tools.SetParallel(tool, true)
+		}
+	}
 
 	// Wrap tools with hook interception for the top-level agent only.
 	// Sub-agents (the `agent` task tool, `agentic_fetch`, etc.) run
@@ -756,7 +867,8 @@ func (c *coordinator) buildOpenaiCompatProvider(baseURL, apiKey string, headers 
 
 	// Set HTTP client based on provider and debug mode.
 	var httpClient *http.Client
-	if providerID == string(catwalk.InferenceProviderCopilot) {
+	switch providerID {
+	case string(catwalk.InferenceProviderCopilot):
 		opts = append(
 			opts,
 			openaicompat.WithUseResponsesAPI(),
@@ -765,7 +877,8 @@ func (c *coordinator) buildOpenaiCompatProvider(baseURL, apiKey string, headers 
 			}),
 		)
 		httpClient = copilot.NewClient(isSubAgent, c.cfg.Config().Options.Debug)
-	} else if c.cfg.Config().Options.Debug {
+	}
+	if httpClient == nil && c.cfg.Config().Options.Debug {
 		httpClient = log.NewHTTPClient()
 	}
 	if httpClient != nil {
@@ -806,7 +919,7 @@ func (c *coordinator) buildAzureProvider(baseURL, apiKey string, headers map[str
 	return azure.New(opts...)
 }
 
-func (c *coordinator) buildBedrockProvider(apiKey string, headers map[string]string) (fantasy.Provider, error) {
+func (c *coordinator) buildBedrockProvider(apiKey string, headers map[string]string, providerID string) (fantasy.Provider, error) {
 	var opts []bedrock.Option
 	if c.cfg.Config().Options.Debug {
 		httpClient := log.NewHTTPClient()
@@ -815,6 +928,7 @@ func (c *coordinator) buildBedrockProvider(apiKey string, headers map[string]str
 	if len(headers) > 0 {
 		opts = append(opts, bedrock.WithHeaders(headers))
 	}
+
 	switch {
 	case apiKey != "":
 		opts = append(opts, bedrock.WithAPIKey(apiKey))
@@ -823,6 +937,14 @@ func (c *coordinator) buildBedrockProvider(apiKey string, headers map[string]str
 	default:
 		// Skip, let the SDK do authentication.
 	}
+
+	switch providerID {
+	case string(catwalk.InferenceProviderBedrockEurope):
+		opts = append(opts, bedrock.WithRegion("eu-west-1"))
+	default:
+		opts = append(opts, bedrock.WithRegion("us-east-1"))
+	}
+
 	return bedrock.New(opts...)
 }
 
@@ -885,6 +1007,14 @@ func (c *coordinator) buildProvider(providerCfg config.ProviderConfig, model con
 	apiKey, _ := c.cfg.Resolve(providerCfg.APIKey)
 	baseURL, _ := c.cfg.Resolve(providerCfg.BaseURL)
 
+	switch providerCfg.ID {
+	case string(catwalk.InferenceProviderOpenCodeGo), string(catwalk.InferenceProviderOpenCodeZen):
+		if opencodeMessagesModels[model.Model] {
+			baseURL = strings.TrimSuffix(baseURL, "/v1")
+			return c.buildAnthropicProvider(baseURL, apiKey, headers, providerCfg.ID)
+		}
+	}
+
 	switch providerCfg.Type {
 	case openai.Name:
 		return c.buildOpenaiProvider(baseURL, apiKey, headers)
@@ -897,7 +1027,7 @@ func (c *coordinator) buildProvider(providerCfg config.ProviderConfig, model con
 	case azure.Name:
 		return c.buildAzureProvider(baseURL, apiKey, headers, providerCfg.ExtraParams)
 	case bedrock.Name:
-		return c.buildBedrockProvider(apiKey, headers)
+		return c.buildBedrockProvider(apiKey, headers, providerCfg.ID)
 	case google.Name:
 		return c.buildGoogleProvider(baseURL, apiKey, headers)
 	case "google-vertex":
@@ -916,6 +1046,23 @@ func (c *coordinator) buildProvider(providerCfg config.ProviderConfig, model con
 		return c.buildOpenaiCompatProvider(baseURL, apiKey, headers, providerCfg.ExtraBody, providerCfg.ID, isSubAgent)
 	default:
 		return nil, fmt.Errorf("provider type not supported: %q", providerCfg.Type)
+	}
+}
+
+// isReadOnlyTool reports whether a tool is read-only (no side effects).
+// Read-only tools are safe for parallel execution by the fantasy agent loop.
+func isReadOnlyTool(name string) bool {
+	switch name {
+	case "glob", "grep", "ls", "view",
+		"sourcegraph",
+		"lsp_diagnostics", "lsp_references",
+		"list_mcp_resources", "read_mcp_resource",
+		"crush_info", "crush_logs",
+		"job_output",
+		"task_get", "task_list":
+		return true
+	default:
+		return false
 	}
 }
 
