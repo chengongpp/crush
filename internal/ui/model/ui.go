@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -40,6 +41,7 @@ import (
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/charmbracelet/crush/internal/session"
 	"github.com/charmbracelet/crush/internal/skills"
+	"github.com/charmbracelet/crush/internal/stringext"
 	"github.com/charmbracelet/crush/internal/ui/anim"
 	"github.com/charmbracelet/crush/internal/ui/attachments"
 	"github.com/charmbracelet/crush/internal/ui/chat"
@@ -259,6 +261,7 @@ type UI struct {
 
 	// pills state
 	pillsExpanded      bool
+	pillsAutoExpanded  bool
 	focusedPillSection pillSection
 	promptQueue        int
 	pillsView          string
@@ -317,6 +320,7 @@ func New(com *common.Common, initialSessionID string, continueLast bool) *UI {
 			com.Styles.Attachments.Deleting,
 			com.Styles.Attachments.Image,
 			com.Styles.Attachments.Text,
+			com.Styles.Attachments.Skill,
 		),
 		attachments.Keymap{
 			DeleteMode: keyMap.Editor.AttachmentDeleteMode,
@@ -343,6 +347,7 @@ func New(com *common.Common, initialSessionID string, continueLast bool) *UI {
 		notifyWindowFocused: true,
 		initialSessionID:    initialSessionID,
 		continueLastSession: continueLast,
+		skillStates:         skills.GetLatestStates(),
 	}
 
 	status := NewStatus(com, ui)
@@ -428,21 +433,76 @@ func (m *UI) sendNotification(n notification.Notification) tea.Cmd {
 		return nil
 	}
 
-	backend := m.notifyBackend
-	return func() tea.Msg {
-		if err := backend.Send(n); err != nil {
-			slog.Error("Failed to send notification", "error", err)
+	return m.notifyBackend.Send(n)
+}
+
+// selectNotificationBackend chooses the appropriate notification backend based
+// on terminal capabilities, environment, and user configuration. This is a pure
+// function that should be called once during initialization or when capabilities
+// change.
+func selectNotificationBackend(caps common.Capabilities, cfg *config.Config) notification.Backend {
+	// Check for explicit user preference first.
+	if cfg != nil && cfg.Options != nil && cfg.Options.NotificationStyle != "" {
+		switch cfg.Options.NotificationStyle {
+		case "native":
+			slog.Debug("Using native backend (user preference)")
+			return notification.NewNativeBackend(notification.Icon)
+		case "osc":
+			slog.Debug("Using OSC backend (user preference)", "osc99_supported", caps.OSC99Notifications)
+			return notification.NewOSCBackend(notification.Icon, caps.OSC99Notifications)
+		case "bell":
+			slog.Debug("Using bell backend (user preference)")
+			return notification.NewBellBackend()
+		case "disabled":
+			slog.Debug("Notifications disabled (user preference)")
+			return notification.NoopBackend{}
+		case "auto":
+			// Fall through to auto-detection below.
+		default:
+			slog.Warn("Unknown notification style, using auto", "style", cfg.Options.NotificationStyle)
 		}
-		return nil
 	}
+
+	// Auto-detect based on environment and capabilities.
+	_, isSSH := caps.Env.LookupEnv("SSH_TTY")
+
+	// SSH sessions use terminal-based notifications (OSC 99 or 777).
+	if isSSH {
+		slog.Debug("Selected OSCBackend for SSH session", "osc99_supported", caps.OSC99Notifications)
+		return notification.NewOSCBackend(notification.Icon, caps.OSC99Notifications)
+	}
+
+	// Local sessions: prefer OSC on macOS because the native backend (beeep)
+	// uses terminal-notifier or AppleScript, which is slow and doesn't display
+	// icons properly. OSC 99 provides a more polished experience with icon support.
+	if runtime.GOOS == "darwin" {
+		slog.Debug("Selected OSCBackend for local macOS session", "osc99_supported", caps.OSC99Notifications)
+		return notification.NewOSCBackend(notification.Icon, caps.OSC99Notifications)
+	}
+
+	// Non-macOS local sessions use native OS notifications if focus events are supported.
+	// Without focus events, we can't suppress notifications when focused, so
+	// we disable them entirely to avoid spamming the user.
+	if caps.ReportFocusEvents {
+		slog.Debug("Selected NativeBackend for local session")
+		return notification.NewNativeBackend(notification.Icon)
+	}
+
+	slog.Debug("Selected NoopBackend (focus events not supported)")
+	return notification.NoopBackend{}
+}
+
+func (m *UI) updateNotificationBackend() {
+	cfg := m.com.Config()
+	m.notifyBackend = selectNotificationBackend(m.caps, cfg)
 }
 
 // shouldSendNotification returns true if notifications should be sent based on
-// current state. Focus reporting must be supported, window must not focused,
-// and notifications must not be disabled in config.
+// current state. Focus reporting must be supported, window must not be
+// focused, and notifications must not be disabled in config.
 func (m *UI) shouldSendNotification() bool {
 	cfg := m.com.Config()
-	if cfg != nil && cfg.Options != nil && cfg.Options.DisableNotifications {
+	if cfg != nil && cfg.Options != nil && cfg.Options.NotificationStyle == "disabled" {
 		return false
 	}
 	return m.caps.ReportFocusEvents && !m.notifyWindowFocused
@@ -467,6 +527,10 @@ func (m *UI) loadCustomCommands() tea.Cmd {
 		if err != nil {
 			slog.Error("Failed to load custom commands", "error", err)
 		}
+		// Append user-invocable skills as commands
+		skillCommands := commands.LoadSkillCommands()
+		skillCommands = append(skillCommands, commands.LoadProjectSkillCommands(m.com.Workspace.WorkingDir())...)
+		customCommands = append(customCommands, skillCommands...)
 		return userCommandsLoadedMsg{Commands: customCommands}
 	}
 }
@@ -504,9 +568,9 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmds = append(cmds, common.QueryCmd(uv.Environ(msg)))
 	case tea.ModeReportMsg:
-		if m.caps.ReportFocusEvents {
-			m.notifyBackend = notification.NewNativeBackend(notification.Icon)
-		}
+		m.updateNotificationBackend()
+	case uv.UnknownOscEvent:
+		m.updateNotificationBackend()
 	case tea.FocusMsg:
 		m.notifyWindowFocused = true
 	case tea.BlurMsg:
@@ -529,6 +593,9 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 		if cmd := m.setSessionMessages(msgs); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		if cmd := m.autoExpandPillsIfReasonable(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 		if hasInProgressTodo(m.session.Todos) {
@@ -606,6 +673,7 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, m.todoSpinner.Tick)
 				m.updateLayoutAndSize()
 			}
+			m.autoExpandPillsIfReasonable()
 		}
 	case pubsub.Event[message.Message]:
 		// Check if this is a child session message for an agent tool.
@@ -1347,22 +1415,19 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 		m.com.Workspace.PermissionSetSkipRequests(yolo)
 		m.setEditorPrompt(yolo)
 		m.dialog.CloseDialog(dialog.CommandsID)
-	case dialog.ActionToggleNotifications:
+	case dialog.ActionSelectNotificationStyle:
 		cfg := m.com.Config()
 		if cfg != nil && cfg.Options != nil {
-			disabled := !cfg.Options.DisableNotifications
-			cfg.Options.DisableNotifications = disabled
-			if err := m.com.Workspace.SetConfigField(config.ScopeGlobal, "options.disable_notifications", disabled); err != nil {
+			cfg.Options.NotificationStyle = msg.Style
+			if err := m.com.Workspace.SetConfigField(config.ScopeGlobal, "options.notification_style", msg.Style); err != nil {
 				cmds = append(cmds, util.ReportError(err))
 			} else {
-				status := "enabled"
-				if disabled {
-					status = "disabled"
-				}
-				cmds = append(cmds, util.CmdHandler(util.NewInfoMsg("Notifications "+status)))
+				cmds = append(cmds, util.CmdHandler(util.NewInfoMsg("Notifications set to: "+msg.Style)))
 			}
+			// Reinitialize notification backend with new style.
+			m.notifyBackend = selectNotificationBackend(m.caps, cfg)
 		}
-		m.dialog.CloseDialog(dialog.CommandsID)
+		m.dialog.CloseDialog(dialog.NotificationsID)
 	case dialog.ActionNewSession:
 		if m.isAgentBusy() {
 			cmds = append(cmds, util.ReportWarn("Agent is busy, please wait before starting a new session..."))
@@ -1540,8 +1605,15 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 		if msg.Args != nil {
 			content = substituteArgs(content, msg.Args)
 		}
+		// If this is a skill command, format it using the skill's FormatInvocation method
+		if msg.Skill != nil {
+			content = msg.Skill.FormatInvocation()
+		}
 		cmds = append(cmds, m.sendMessage(content))
 		m.dialog.CloseFrontDialog()
+	case dialog.ActionAttachSkill:
+		m.dialog.CloseFrontDialog()
+		cmds = append(cmds, m.attachSkill(msg.ID, msg.Name))
 	case dialog.ActionRunMCPPrompt:
 		if len(msg.Arguments) > 0 && msg.Args == nil {
 			m.dialog.CloseFrontDialog()
@@ -1683,7 +1755,14 @@ func (m *UI) handleSelectModel(msg dialog.ActionSelectModel) tea.Cmd {
 			return util.ReportError(err)
 		}
 
-		modelMsg := fmt.Sprintf("%s model changed to %s", msg.ModelType, msg.Model.Model)
+		var (
+			modelType = stringext.Capitalize(string(msg.ModelType))
+			modelName = msg.Model.Model
+		)
+		if catwalkModel := cfg.GetModel(msg.Model.Provider, msg.Model.Model); catwalkModel != nil && catwalkModel.Name != "" {
+			modelName = catwalkModel.Name
+		}
+		modelMsg := fmt.Sprintf("%s model changed to %s", modelType, modelName)
 
 		return util.NewInfoMsg(modelMsg)
 	})
@@ -1786,6 +1865,16 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 				return true
 			}
 			cmds = append(cmds, tea.Suspend)
+			return true
+		case key.Matches(msg, m.keyMap.ToggleYolo):
+			yolo := !m.com.Workspace.PermissionSkipRequests()
+			m.com.Workspace.PermissionSetSkipRequests(yolo)
+			m.setEditorPrompt(yolo)
+			status := "disabled"
+			if yolo {
+				status = "enabled"
+			}
+			cmds = append(cmds, util.ReportInfo("Yolo mode "+status))
 			return true
 		}
 		return false
@@ -2300,7 +2389,8 @@ func (m *UI) ShortHelp() []key.Binding {
 			tab.SetHelp("tab", "focus editor")
 		}
 
-		binds = append(binds,
+		binds = append(
+			binds,
 			tab,
 			commands,
 			k.Models,
@@ -2308,11 +2398,13 @@ func (m *UI) ShortHelp() []key.Binding {
 
 		switch m.focus {
 		case uiFocusEditor:
-			binds = append(binds,
+			binds = append(
+				binds,
 				k.Editor.Newline,
 			)
 		case uiFocusMain:
-			binds = append(binds,
+			binds = append(
+				binds,
 				k.Chat.UpDown,
 				k.Chat.UpDownOneItem,
 				k.Chat.PageUp,
@@ -2327,14 +2419,16 @@ func (m *UI) ShortHelp() []key.Binding {
 		// TODO: other states
 		// if m.session == nil {
 		// no session selected
-		binds = append(binds,
+		binds = append(
+			binds,
 			commands,
 			k.Models,
 			k.Editor.Newline,
 		)
 	}
 
-	binds = append(binds,
+	binds = append(
+		binds,
 		k.Quit,
 		k.Help,
 	)
@@ -2381,11 +2475,13 @@ func (m *UI) FullHelp() [][]key.Binding {
 			tab.SetHelp("tab", "focus editor")
 		}
 
-		mainBinds = append(mainBinds,
+		mainBinds = append(
+			mainBinds,
 			tab,
 			commands,
 			k.Models,
 			k.Sessions,
+			k.ToggleYolo,
 		)
 		if hasSession {
 			mainBinds = append(mainBinds, k.Chat.NewSession)
@@ -2405,7 +2501,8 @@ func (m *UI) FullHelp() [][]key.Binding {
 			}
 			binds = append(binds, editorBinds)
 			if hasAttachments {
-				binds = append(binds,
+				binds = append(
+					binds,
 					[]key.Binding{
 						k.Editor.AttachmentDeleteMode,
 						k.Editor.DeleteAllAttachments,
@@ -2414,7 +2511,8 @@ func (m *UI) FullHelp() [][]key.Binding {
 				)
 			}
 		case uiFocusMain:
-			binds = append(binds,
+			binds = append(
+				binds,
 				[]key.Binding{
 					k.Chat.UpDown,
 					k.Chat.UpDownOneItem,
@@ -2439,11 +2537,13 @@ func (m *UI) FullHelp() [][]key.Binding {
 	default:
 		if m.session == nil {
 			// no session selected
-			binds = append(binds,
+			binds = append(
+				binds,
 				[]key.Binding{
 					commands,
 					k.Models,
 					k.Sessions,
+					k.ToggleYolo,
 				},
 			)
 			editorBinds := []key.Binding{
@@ -2456,7 +2556,8 @@ func (m *UI) FullHelp() [][]key.Binding {
 			}
 			binds = append(binds, editorBinds)
 			if hasAttachments {
-				binds = append(binds,
+				binds = append(
+					binds,
 					[]key.Binding{
 						k.Editor.AttachmentDeleteMode,
 						k.Editor.DeleteAllAttachments,
@@ -2467,7 +2568,8 @@ func (m *UI) FullHelp() [][]key.Binding {
 		}
 	}
 
-	binds = append(binds,
+	binds = append(
+		binds,
 		[]key.Binding{
 			help,
 			k.Quit,
@@ -3116,10 +3218,35 @@ func (m *UI) refreshStyles() {
 		t.Attachments.Deleting,
 		t.Attachments.Image,
 		t.Attachments.Text,
+		t.Attachments.Skill,
 	)
 	m.todoSpinner.Style = t.Pills.TodoSpinner
 	m.status.help.Styles = t.Help
 	m.chat.InvalidateRenderCaches()
+}
+
+// attachSkill reads a skill's content by ID and returns it as a markdown
+// attachment to be added to the attachment toolbar. The user can then
+// compose a message and send it with the skill attached.
+// The name parameter is used as a fallback when the server does not
+// return one.
+func (m *UI) attachSkill(skillID, name string) tea.Cmd {
+	return func() tea.Msg {
+		content, result, err := m.com.Workspace.ReadSkill(context.Background(), skillID)
+		if err != nil {
+			return util.NewErrorMsg(err)
+		}
+		fileName := result.Name
+		if fileName == "" {
+			fileName = name
+		}
+		return message.Attachment{
+			FilePath: fileName,
+			FileName: fileName,
+			MimeType: "text/markdown",
+			Content:  content,
+		}
+	}
 }
 
 // sendMessage sends a message with the given content and attachments.
@@ -3234,6 +3361,10 @@ func (m *UI) openDialog(id string) tea.Cmd {
 		if cmd := m.openReasoningDialog(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+	case dialog.NotificationsID:
+		if cmd := m.openNotificationsDialog(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	case dialog.FilePickerID:
 		if cmd := m.openFilesDialog(); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -3323,6 +3454,18 @@ func (m *UI) openReasoningDialog() tea.Cmd {
 	return nil
 }
 
+// openNotificationsDialog opens the notification style picker dialog.
+func (m *UI) openNotificationsDialog() tea.Cmd {
+	if m.dialog.ContainsDialog(dialog.NotificationsID) {
+		m.dialog.BringToFront(dialog.NotificationsID)
+		return nil
+	}
+
+	notificationsDialog := dialog.NewNotifications(m.com)
+	m.dialog.OpenDialog(notificationsDialog)
+	return nil
+}
+
 // openSessionsDialog opens the sessions dialog. If the dialog is already open,
 // it brings it to the front. Otherwise, it will list all the sessions and open
 // the dialog.
@@ -3380,16 +3523,25 @@ func (m *UI) openPermissionsDialog(perm permission.PermissionRequest) tea.Cmd {
 
 // handlePermissionNotification updates tool items when permission state changes.
 func (m *UI) handlePermissionNotification(notification permission.PermissionNotification) {
-	toolItem := m.chat.MessageItem(notification.ToolCallID)
-	if toolItem == nil {
-		return
+	if toolItem := m.chat.MessageItem(notification.ToolCallID); toolItem != nil {
+		if permItem, ok := toolItem.(chat.ToolMessageItem); ok {
+			if notification.Granted {
+				permItem.SetStatus(chat.ToolStatusRunning)
+			} else {
+				permItem.SetStatus(chat.ToolStatusAwaitingPermission)
+			}
+		}
 	}
 
-	if permItem, ok := toolItem.(chat.ToolMessageItem); ok {
-		if notification.Granted {
-			permItem.SetStatus(chat.ToolStatusRunning)
-		} else {
-			permItem.SetStatus(chat.ToolStatusAwaitingPermission)
+	// If this notification reflects a final resolution (granted or denied),
+	// dismiss any open permissions dialog whose tool call ID matches. This
+	// covers the case where another client resolved the request remotely.
+	if !notification.Granted && !notification.Denied {
+		return
+	}
+	if d := m.dialog.Dialog(dialog.PermissionsID); d != nil {
+		if perm, ok := d.(*dialog.Permissions); ok && perm.ToolCallID() == notification.ToolCallID {
+			m.dialog.CloseDialog(dialog.PermissionsID)
 		}
 	}
 }
@@ -3447,6 +3599,7 @@ func (m *UI) newSession() tea.Cmd {
 	m.chat.Blur()
 	m.chat.ClearMessages()
 	m.pillsExpanded = false
+	m.pillsAutoExpanded = false
 	m.promptQueue = 0
 	m.pillsView = ""
 	m.historyReset()
@@ -3457,11 +3610,15 @@ func (m *UI) newSession() tea.Cmd {
 			return nil
 		},
 		m.loadPromptHistory(),
+		m.reportCurrentSession(""),
 	)
 }
 
 // handlePasteMsg handles a paste message.
 func (m *UI) handlePasteMsg(msg tea.PasteMsg) tea.Cmd {
+	// Normalize \r\n before the textarea sanitizer sees it.
+	msg.Content = strings.ReplaceAll(msg.Content, "\r\n", "\n")
+
 	if m.dialog.HasDialogs() {
 		return m.handleDialogMsg(msg)
 	}

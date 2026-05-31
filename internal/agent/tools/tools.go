@@ -1,8 +1,11 @@
 package tools
 
 import (
+	"bytes"
 	"context"
+	"html/template"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
@@ -98,11 +101,41 @@ func FirstLineDescription(content []byte) string {
 			return strings.TrimSpace(string(content))
 		}
 	}
-	for line := range strings.SplitSeq(string(content), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			return line
-		}
+	firstLine, _, _ := bytes.Cut(content, []byte("\n"))
+	return strings.TrimSpace(string(firstLine))
+}
+
+// ghAvailable indicates whether the `gh` CLI is available on PATH.
+var ghAvailable = func() bool {
+	if testing.Testing() {
+		return false
 	}
-	return ""
+	_, err := exec.LookPath("gh")
+	return err == nil
+}()
+
+// toolDescriptionData is the common data structure for tool description templates.
+type toolDescriptionData struct {
+	GhAvailable bool
+}
+
+// renderToolDescription renders a tool description template with the given data.
+func renderToolDescription(tmpl *template.Template) string {
+	data := toolDescriptionData{
+		GhAvailable: ghAvailable,
+	}
+	var out bytes.Buffer
+	if err := tmpl.Execute(&out, data); err != nil {
+		panic("failed to execute tool description template: " + err.Error())
+	}
+	return out.String()
+}
+
+// renderTemplate renders a Go template with the given data.
+func renderTemplate(tmpl *template.Template, data any) string {
+	var out bytes.Buffer
+	if err := tmpl.Execute(&out, data); err != nil {
+		panic("failed to execute tool description template: " + err.Error())
+	}
+	return out.String()
 }
