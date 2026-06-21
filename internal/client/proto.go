@@ -423,10 +423,46 @@ func (c *Client) SendMessage(ctx context.Context, id string, sessionID, runID, p
 		return fmt.Errorf("failed to send message to agent: %w", err)
 	}
 	defer rsp.Body.Close()
-	if rsp.StatusCode != http.StatusOK {
+	if rsp.StatusCode != http.StatusOK && rsp.StatusCode != http.StatusAccepted {
+		if msg := decodeErrorMessage(rsp.Body); msg != "" {
+			return fmt.Errorf("failed to send message to agent: status code %d: %s", rsp.StatusCode, msg)
+		}
 		return fmt.Errorf("failed to send message to agent: status code %d", rsp.StatusCode)
 	}
 	return nil
+}
+
+// decodeErrorMessage attempts to decode the response body as a
+// proto.Error and returns its message. It returns an empty string
+// when the body is empty or cannot be decoded into a proto.Error
+// with a non-empty message, letting callers fall back to a
+// status-only error.
+func decodeErrorMessage(body io.Reader) string {
+	var e proto.Error
+	if err := json.NewDecoder(body).Decode(&e); err != nil {
+		return ""
+	}
+	return e.Message
+}
+
+// RunShellCommand runs a shell command in the workspace without triggering the agent.
+func (c *Client) RunShellCommand(ctx context.Context, id, sessionID, command string, termWidth int) (proto.ShellCommandResponse, error) {
+	rsp, err := c.post(ctx, fmt.Sprintf("/workspaces/%s/agent/sessions/%s/shell", id, sessionID), nil, jsonBody(proto.ShellCommandRequest{
+		Command:   command,
+		TermWidth: termWidth,
+	}), http.Header{"Content-Type": []string{"application/json"}})
+	if err != nil {
+		return proto.ShellCommandResponse{}, fmt.Errorf("failed to run shell command: %w", err)
+	}
+	defer rsp.Body.Close()
+	if rsp.StatusCode != http.StatusOK {
+		return proto.ShellCommandResponse{}, fmt.Errorf("failed to run shell command: status code %d", rsp.StatusCode)
+	}
+	var resp proto.ShellCommandResponse
+	if err := json.NewDecoder(rsp.Body).Decode(&resp); err != nil {
+		return proto.ShellCommandResponse{}, fmt.Errorf("failed to decode shell command response: %w", err)
+	}
+	return resp, nil
 }
 
 // GetAgentSessionInfo retrieves the agent session info for a workspace.

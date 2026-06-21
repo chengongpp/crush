@@ -186,6 +186,10 @@ func (w *ClientWorkspace) AgentRun(ctx context.Context, sessionID, prompt string
 	return w.client.SendMessage(ctx, w.workspaceID(), sessionID, "", prompt, attachments...)
 }
 
+func (w *ClientWorkspace) AgentRunShellCommand(ctx context.Context, sessionID, command string, termWidth int, _ func(string), _ bool) (proto.ShellCommandResponse, error) {
+	return w.client.RunShellCommand(ctx, w.workspaceID(), sessionID, command, termWidth)
+}
+
 func (w *ClientWorkspace) AgentCancel(sessionID string) {
 	_ = w.client.CancelAgentSession(context.Background(), w.workspaceID(), sessionID)
 }
@@ -506,11 +510,12 @@ func (w *ClientWorkspace) ListSkills(ctx context.Context) ([]skills.CatalogEntry
 	result := make([]skills.CatalogEntry, len(entries))
 	for i, entry := range entries {
 		result[i] = skills.CatalogEntry{
-			ID:          entry.ID,
-			Name:        entry.Name,
-			Description: entry.Description,
-			Label:       entry.Label,
-			Source:      skills.SourceType(entry.Source),
+			ID:            entry.ID,
+			Name:          entry.Name,
+			Description:   entry.Description,
+			Label:         entry.Label,
+			Source:        skills.SourceType(entry.Source),
+			UserInvocable: entry.UserInvocable,
 		}
 	}
 	return result, nil
@@ -703,13 +708,18 @@ func (w *ClientWorkspace) translateEvent(ev any) tea.Msg {
 			Payload: protoToFile(e.Payload),
 		}
 	case pubsub.Event[proto.AgentEvent]:
+		n := notify.Notification{
+			SessionID:    e.Payload.SessionID,
+			SessionTitle: e.Payload.SessionTitle,
+			RunID:        e.Payload.RunID,
+			Type:         notify.Type(e.Payload.Type),
+		}
+		if e.Payload.Error != nil {
+			n.Message = e.Payload.Error.Error()
+		}
 		return pubsub.Event[notify.Notification]{
-			Type: e.Type,
-			Payload: notify.Notification{
-				SessionID:    e.Payload.SessionID,
-				SessionTitle: e.Payload.SessionTitle,
-				Type:         notify.Type(e.Payload.Type),
-			},
+			Type:    e.Type,
+			Payload: n,
 		}
 	case pubsub.Event[proto.RunComplete]:
 		// Translate the wire-level proto.RunComplete back into the
@@ -859,6 +869,12 @@ func protoToMessage(m proto.Message) message.Message {
 			msg.Parts = append(msg.Parts, message.ImageURLContent{URL: v.URL, Detail: v.Detail})
 		case proto.BinaryContent:
 			msg.Parts = append(msg.Parts, message.BinaryContent{Path: v.Path, MIMEType: v.MIMEType, Data: v.Data})
+		case proto.ShellCommand:
+			msg.Parts = append(msg.Parts, message.ShellCommand{
+				Command:  v.Command,
+				Output:   v.Output,
+				ExitCode: v.ExitCode,
+			})
 		}
 	}
 

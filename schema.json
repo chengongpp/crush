@@ -116,6 +116,10 @@
     },
     "HookConfig": {
       "properties": {
+        "name": {
+          "type": "string",
+          "description": "Friendly display name shown in the TUI for this hook"
+        },
         "matcher": {
           "type": "string",
           "description": "Regex pattern tested against the tool name. Empty means match all tools."
@@ -411,6 +415,17 @@
           "type": "array",
           "description": "Paths to files containing context information for the AI"
         },
+        "global_context_paths": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "description": "Paths to files containing global context information for the AI",
+          "default": [
+            "~/.config/crush/CRUSH.md",
+            "~/.config/AGENTS.md"
+          ]
+        },
         "skills_paths": {
           "items": {
             "type": "string",
@@ -577,10 +592,18 @@
           "enum": [
             "openai",
             "openai-compat",
+            "openrouter",
+            "vercel",
             "anthropic",
-            "gemini",
+            "google",
             "azure",
-            "vertexai"
+            "bedrock",
+            "google-vertex",
+            "hyper",
+            "litellm",
+            "lmstudio",
+            "ollama",
+            "omlx"
           ],
           "description": "Provider type that determines the API format",
           "default": "openai"
@@ -623,6 +646,11 @@
         "flat_rate": {
           "type": "boolean",
           "description": "Flat-rate mode for this provider"
+        },
+        "discover_models": {
+          "type": "boolean",
+          "description": "Auto-discover models from /v1/models endpoint. When true with existing models they are merged (yours win)",
+          "default": true
         },
         "models": {
           "items": {

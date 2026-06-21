@@ -24,6 +24,7 @@ import (
 	"github.com/charmbracelet/crush/internal/agent/tools"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/agent/filestatecache"
+	"github.com/charmbracelet/crush/internal/discover"
 	"github.com/charmbracelet/crush/internal/event"
 	"github.com/charmbracelet/crush/internal/filetracker"
 	"github.com/charmbracelet/crush/internal/history"
@@ -82,6 +83,15 @@ type Coordinator interface {
 	// INFO: (kujtim) this is not used yet we will use this when we have multiple agents
 	// SetMainAgent(string)
 	Run(ctx context.Context, sessionID, prompt string, attachments ...message.Attachment) (*fantasy.AgentResult, error)
+	// RunAccepted runs a call that was already accepted via
+	// BeginAccepted on the fire-and-forget dispatch path. The handle is
+	// the only carrier of accept-state across the backend.runAgent /
+	// Coordinator / sessionAgent.Run layers: it reaches
+	// sessionAgent.Run as SessionAgentCall.Accepted, where it is
+	// consumed under dispatchMu once the accepted -> (cancel-on-entry |
+	// queued | active) transition is chosen.
+	RunAccepted(ctx context.Context, accept *AcceptedRun, sessionID, prompt string, attachments ...message.Attachment) (*fantasy.AgentResult, error)
+	BeginAccepted(sessionID string) *AcceptedRun
 	Cancel(sessionID string)
 	CancelAll()
 	IsSessionBusy(sessionID string) bool
@@ -92,6 +102,7 @@ type Coordinator interface {
 	Summarize(context.Context, string) error
 	Model() Model
 	UpdateModels(ctx context.Context) error
+	GenerateTitle(ctx context.Context, sessionID, prompt string)
 }
 
 type coordinator struct {
@@ -205,6 +216,20 @@ func (c *coordinator) fireSessionStart(ctx context.Context) {
 
 // Run implements Coordinator.
 func (c *coordinator) Run(ctx context.Context, sessionID string, prompt string, attachments ...message.Attachment) (*fantasy.AgentResult, error) {
+	return c.run(ctx, nil, sessionID, prompt, attachments...)
+}
+
+// RunAccepted implements Coordinator.
+func (c *coordinator) RunAccepted(ctx context.Context, accept *AcceptedRun, sessionID string, prompt string, attachments ...message.Attachment) (*fantasy.AgentResult, error) {
+	return c.run(ctx, accept, sessionID, prompt, attachments...)
+}
+
+// run is the shared implementation behind Run and RunAccepted. When
+// accept is non-nil it is threaded onto the SessionAgentCall as
+// Accepted so sessionAgent.Run can consume the accept reservation under
+// dispatchMu; when nil (the in-process/local path) no accept tracking
+// applies.
+func (c *coordinator) run(ctx context.Context, accept *AcceptedRun, sessionID string, prompt string, attachments ...message.Attachment) (*fantasy.AgentResult, error) {
 	if err := c.readyWg.Wait(); err != nil {
 		return nil, err
 	}
@@ -282,20 +307,34 @@ func (c *coordinator) Run(ctx context.Context, sessionID string, prompt string, 
 			FrequencyPenalty: freqPenalty,
 			PresencePenalty:  presPenalty,
 			OnComplete:       onComplete,
+			Accepted:         accept,
 		})
 	}
 	beforeLoaded := c.skillTracker.LoadedNames()
-	result, originalErr := run()
+	var result *fantasy.AgentResult
+	originalErr := c.runWithUnauthorizedRetry(ctx, providerCfg, func() error {
+		var err error
+		result, err = run()
+		return err
+	})
 	logTurnSkillUsage(sessionID, prompt, c.activeSkills, c.skillTracker, beforeLoaded)
 
-	if c.isUnauthorized(originalErr) {
-		if err := c.retryAfterUnauthorized(ctx, providerCfg); err == nil {
-			result, originalErr = run()
-		}
+	// Notify only if still unauthorized after retry — a successful
+	// retry means the user doesn't need to re-authenticate.
+	if originalErr != nil && c.isUnauthorized(originalErr) && c.notify != nil && model.ModelCfg.Provider == hyper.Name {
+		c.notify.Publish(pubsub.CreatedEvent, notify.Notification{
+			Type:       notify.TypeReAuthenticate,
+			ProviderID: model.ModelCfg.Provider,
+		})
 	}
 
 	if hasLatest && c.runComplete != nil {
 		c.runComplete.PublishMustDeliver(ctx, pubsub.UpdatedEvent, latest)
+		// Signal to the dispatcher (backend.runAgent) that the
+		// authoritative terminal RunComplete for this run was already
+		// emitted, so it does not publish a duplicate fallback for the
+		// error it is about to receive.
+		MarkRunCompletePublished(ctx)
 	}
 	return result, originalErr
 }
@@ -376,13 +415,32 @@ func getProviderOptions(model Model, providerCfg config.ProviderConfig) fantasy.
 		var (
 			_, hasEffort = mergedOptions["effort"]
 			_, hasThink  = mergedOptions["thinking"]
+			extraBody    = make(map[string]any)
 		)
-		switch {
-		case !hasEffort && shouldSetEffort:
-			mergedOptions["effort"] = model.ModelCfg.ReasoningEffort
-		case !hasThink && model.ModelCfg.Think:
-			mergedOptions["thinking"] = map[string]any{"budget_tokens": 2000}
+
+		switch providerCfg.ID {
+		case string(catwalk.InferenceProviderAlibabaSingapore):
+			switch {
+			case !hasEffort && shouldSetEffort:
+				extraBody["reasoning_effort"] = model.ModelCfg.ReasoningEffort
+			case !hasThink && model.CatwalkCfg.CanReason:
+				if model.ModelCfg.Think {
+					extraBody["thinking"] = map[string]any{"type": "enabled"}
+				} else {
+					extraBody["thinking"] = map[string]any{"type": "disabled"}
+				}
+			}
+			mergedOptions["extra_body"] = extraBody
+
+		default:
+			switch {
+			case !hasEffort && shouldSetEffort:
+				mergedOptions["effort"] = model.ModelCfg.ReasoningEffort
+			case !hasThink && model.ModelCfg.Think:
+				mergedOptions["thinking"] = map[string]any{"budget_tokens": 2000}
+			}
 		}
+
 		parsed, err := anthropic.ParseOptions(mergedOptions)
 		if err == nil {
 			options[anthropic.Name] = parsed
@@ -469,6 +527,15 @@ func getProviderOptions(model Model, providerCfg config.ProviderConfig) fantasy.
 					"type": "disabled",
 				}
 			}
+		case string(catwalk.InferenceProviderFireworks):
+			// NOTE: Fireworks break if we set both `reasoning_effort` and `thinking`.
+			if model.ModelCfg.ReasoningEffort == "" {
+				if model.ModelCfg.Think {
+					extraBody["thinking"] = map[string]any{"type": "enabled"}
+				} else {
+					extraBody["thinking"] = map[string]any{"type": "disabled"}
+				}
+			}
 		case string(catwalk.InferenceProviderAlibabaSingapore):
 			if model.CatwalkCfg.CanReason {
 				extraBody["enable_thinking"] = model.ModelCfg.Think
@@ -480,6 +547,15 @@ func getProviderOptions(model Model, providerCfg config.ProviderConfig) fantasy.
 		parsed, err := openaicompat.ParseOptions(mergedOptions)
 		if err == nil {
 			options[openaicompat.Name] = parsed
+		}
+	default:
+		// Known custom providers (litellm, ollama, omlx) are
+		// openai-compat under the hood.
+		if discover.IsKnownCustomProvider(string(providerCfg.Type)) {
+			parsed, err := openaicompat.ParseOptions(mergedOptions)
+			if err == nil {
+				options[openaicompat.Name] = parsed
+			}
 		}
 	}
 
@@ -1045,6 +1121,11 @@ func (c *coordinator) buildProvider(providerCfg config.ProviderConfig, model con
 		}
 		return c.buildOpenaiCompatProvider(baseURL, apiKey, headers, providerCfg.ExtraBody, providerCfg.ID, isSubAgent)
 	default:
+		// Known custom providers (litellm, ollama, omlx) are
+		// openai-compat under the hood.
+		if discover.IsKnownCustomProvider(string(providerCfg.Type)) {
+			return c.buildOpenaiCompatProvider(baseURL, apiKey, headers, providerCfg.ExtraBody, providerCfg.ID, isSubAgent)
+		}
 		return nil, fmt.Errorf("provider type not supported: %q", providerCfg.Type)
 	}
 }
@@ -1075,6 +1156,15 @@ func isExactoSupported(modelID string) bool {
 		"qwen/qwen3-coder",
 	}
 	return slices.Contains(supportedModels, modelID)
+}
+
+// BeginAccepted reserves an accept slot for sessionID on the active
+// agent and returns the ownership handle. It is the fire-and-forget
+// dispatch path's only way to mark a run as accepted-but-not-yet-active
+// so a cancel arriving before the run registers in activeRequests is not
+// lost.
+func (c *coordinator) BeginAccepted(sessionID string) *AcceptedRun {
+	return c.currentAgent.BeginAccepted(sessionID)
 }
 
 func (c *coordinator) Cancel(sessionID string) {
@@ -1144,14 +1234,15 @@ func (c *coordinator) Summarize(ctx context.Context, sessionID string) error {
 		return c.currentAgent.Summarize(ctx, sessionID, getProviderOptions(c.currentAgent.Model(), providerCfg))
 	}
 
-	err := summarize()
-	if err != nil && c.isUnauthorized(err) {
-		if retryErr := c.retryAfterUnauthorized(ctx, providerCfg); retryErr == nil {
-			return summarize()
-		}
-	}
+	return c.runWithUnauthorizedRetry(ctx, providerCfg, summarize)
+}
 
-	return err
+// GenerateTitle generates a session title using the current agent.
+func (c *coordinator) GenerateTitle(ctx context.Context, sessionID, prompt string) {
+	if c.currentAgent == nil {
+		return
+	}
+	c.currentAgent.GenerateTitle(ctx, sessionID, prompt)
 }
 
 // refreshTokenIfExpired proactively refreshes the OAuth token if it has expired.
@@ -1161,6 +1252,21 @@ func (c *coordinator) refreshTokenIfExpired(ctx context.Context, providerCfg con
 	}
 	slog.Debug("Token needs to be refreshed", "provider", providerCfg.ID)
 	return c.refreshOAuth2Token(ctx, providerCfg)
+}
+
+// runWithUnauthorizedRetry executes fn. If fn returns a 401 error, it
+// attempts to refresh credentials and re-runs fn once. Returns the
+// final error: from the retry if a retry was attempted, otherwise from
+// the original run. Callers that need to notify the user on persistent
+// failure should check isUnauthorized on the returned error.
+func (c *coordinator) runWithUnauthorizedRetry(ctx context.Context, providerCfg config.ProviderConfig, fn func() error) error {
+	err := fn()
+	if err != nil && c.isUnauthorized(err) {
+		if retryErr := c.retryAfterUnauthorized(ctx, providerCfg); retryErr == nil {
+			return fn()
+		}
+	}
+	return err
 }
 
 // retryAfterUnauthorized attempts to refresh credentials after receiving a 401
@@ -1252,28 +1358,59 @@ func (c *coordinator) runSubAgent(ctx context.Context, params subAgentParams) (f
 	}
 
 	// Run the agent
-	result, err := params.Agent.Run(ctx, SessionAgentCall{
-		SessionID:        session.ID,
-		Prompt:           params.Prompt,
-		MaxOutputTokens:  maxTokens,
-		ProviderOptions:  getProviderOptions(model, providerCfg),
-		Temperature:      model.ModelCfg.Temperature,
-		TopP:             model.ModelCfg.TopP,
-		TopK:             model.ModelCfg.TopK,
-		FrequencyPenalty: model.ModelCfg.FrequencyPenalty,
-		PresencePenalty:  model.ModelCfg.PresencePenalty,
-		NonInteractive:   true,
+	run := func() (*fantasy.AgentResult, error) {
+		return params.Agent.Run(ctx, SessionAgentCall{
+			SessionID:        session.ID,
+			Prompt:           params.Prompt,
+			MaxOutputTokens:  maxTokens,
+			ProviderOptions:  getProviderOptions(model, providerCfg),
+			Temperature:      model.ModelCfg.Temperature,
+			TopP:             model.ModelCfg.TopP,
+			TopK:             model.ModelCfg.TopK,
+			FrequencyPenalty: model.ModelCfg.FrequencyPenalty,
+			PresencePenalty:  model.ModelCfg.PresencePenalty,
+			NonInteractive:   true,
+		})
+	}
+	var result *fantasy.AgentResult
+	err = c.runWithUnauthorizedRetry(ctx, providerCfg, func() error {
+		var runErr error
+		result, runErr = run()
+		return runErr
 	})
+	// Notify only if still unauthorized after retry.
+	if err != nil && c.isUnauthorized(err) && c.notify != nil && model.ModelCfg.Provider == hyper.Name {
+		c.notify.Publish(pubsub.CreatedEvent, notify.Notification{
+			Type:       notify.TypeReAuthenticate,
+			ProviderID: model.ModelCfg.Provider,
+		})
+	}
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("Failed to generate response: %s", err)), nil
 	}
 
-	// Update parent session cost
+	// Update parent session cost on a best-effort basis. A failure here must
+	// not discard the sub-agent output that was already produced.
 	if err := c.updateParentSessionCost(ctx, session.ID, params.SessionID); err != nil {
-		return fantasy.ToolResponse{}, err
+		slog.Warn("Failed to update parent session cost",
+			"child_session", session.ID,
+			"parent_session", params.SessionID,
+			"error", err,
+		)
 	}
 
-	return fantasy.NewTextResponse(result.Response.Content.Text()), nil
+	output := subAgentOutput(result)
+	if output == "" {
+		return fantasy.NewTextErrorResponse("Sub-agent completed but produced no text output."), nil
+	}
+	return fantasy.NewTextResponse(output), nil
+}
+
+func subAgentOutput(result *fantasy.AgentResult) string {
+	if result == nil {
+		return ""
+	}
+	return result.Response.Content.Text()
 }
 
 // updateParentSessionCost accumulates the cost from a child session to its parent session.

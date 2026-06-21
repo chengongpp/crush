@@ -25,6 +25,10 @@ func (m *mockSessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fan
 	return m.runFunc(ctx, call)
 }
 
+func (m *mockSessionAgent) BeginAccepted(sessionID string) *AcceptedRun {
+	return &AcceptedRun{sessionID: sessionID}
+}
+
 func (m *mockSessionAgent) Model() Model                        { return m.model }
 func (m *mockSessionAgent) SetModels(large, small Model)        {}
 func (m *mockSessionAgent) SetTools(tools []fantasy.AgentTool)  {}
@@ -41,6 +45,7 @@ func (m *mockSessionAgent) ClearQueue(sessionID string)                 {}
 func (m *mockSessionAgent) Summarize(context.Context, string, fantasy.ProviderOptions) error {
 	return nil
 }
+func (m *mockSessionAgent) GenerateTitle(context.Context, string, string) {}
 
 // newTestCoordinator creates a minimal coordinator for unit testing runSubAgent.
 func newTestCoordinator(t *testing.T, env fakeEnv, providerID string, providerCfg config.ProviderConfig) *coordinator {
@@ -50,6 +55,7 @@ func newTestCoordinator(t *testing.T, env fakeEnv, providerID string, providerCf
 	return &coordinator{
 		cfg:      cfg,
 		sessions: env.sessions,
+		messages: env.messages,
 	}
 }
 
@@ -107,6 +113,99 @@ func TestRunSubAgent(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "done", resp.Content)
 		assert.False(t, resp.IsError)
+	})
+
+	t.Run("cost update failure preserves output", func(t *testing.T) {
+		env := testEnv(t)
+		coord := newTestCoordinator(t, env, providerID, providerCfg)
+
+		agent := newMockAgent(providerID, 4096, func(_ context.Context, _ SessionAgentCall) (*fantasy.AgentResult, error) {
+			return agentResultWithText("output before cost failure"), nil
+		})
+
+		resp, err := coord.runSubAgent(t.Context(), subAgentParams{
+			Agent:          agent,
+			SessionID:      "missing-parent-session",
+			AgentMessageID: "msg-1",
+			ToolCallID:     "call-1",
+			Prompt:         "test",
+			SessionTitle:   "Test",
+		})
+		require.NoError(t, err)
+		assert.False(t, resp.IsError)
+		assert.Equal(t, "output before cost failure", resp.Content)
+	})
+
+	t.Run("response with text returns it", func(t *testing.T) {
+		env := testEnv(t)
+		coord := newTestCoordinator(t, env, providerID, providerCfg)
+
+		parentSession, err := env.sessions.Create(t.Context(), "Parent")
+		require.NoError(t, err)
+
+		agent := newMockAgent(providerID, 4096, func(_ context.Context, _ SessionAgentCall) (*fantasy.AgentResult, error) {
+			return agentResultWithText("the answer"), nil
+		})
+
+		resp, err := coord.runSubAgent(t.Context(), subAgentParams{
+			Agent:          agent,
+			SessionID:      parentSession.ID,
+			AgentMessageID: "msg-1",
+			ToolCallID:     "call-1",
+			Prompt:         "test",
+			SessionTitle:   "Test",
+		})
+		require.NoError(t, err)
+		assert.False(t, resp.IsError)
+		assert.Equal(t, "the answer", resp.Content)
+	})
+
+	t.Run("nil result returns error response", func(t *testing.T) {
+		env := testEnv(t)
+		coord := newTestCoordinator(t, env, providerID, providerCfg)
+
+		parentSession, err := env.sessions.Create(t.Context(), "Parent")
+		require.NoError(t, err)
+
+		agent := newMockAgent(providerID, 4096, func(_ context.Context, _ SessionAgentCall) (*fantasy.AgentResult, error) {
+			return nil, nil
+		})
+
+		resp, err := coord.runSubAgent(t.Context(), subAgentParams{
+			Agent:          agent,
+			SessionID:      parentSession.ID,
+			AgentMessageID: "msg-1",
+			ToolCallID:     "call-1",
+			Prompt:         "test",
+			SessionTitle:   "Test",
+		})
+		require.NoError(t, err)
+		assert.True(t, resp.IsError)
+		assert.Equal(t, "Sub-agent completed but produced no text output.", resp.Content)
+	})
+
+	t.Run("empty result returns error response", func(t *testing.T) {
+		env := testEnv(t)
+		coord := newTestCoordinator(t, env, providerID, providerCfg)
+
+		parentSession, err := env.sessions.Create(t.Context(), "Parent")
+		require.NoError(t, err)
+
+		agent := newMockAgent(providerID, 4096, func(_ context.Context, _ SessionAgentCall) (*fantasy.AgentResult, error) {
+			return &fantasy.AgentResult{}, nil
+		})
+
+		resp, err := coord.runSubAgent(t.Context(), subAgentParams{
+			Agent:          agent,
+			SessionID:      parentSession.ID,
+			AgentMessageID: "msg-1",
+			ToolCallID:     "call-1",
+			Prompt:         "test",
+			SessionTitle:   "Test",
+		})
+		require.NoError(t, err)
+		assert.True(t, resp.IsError)
+		assert.Equal(t, "Sub-agent completed but produced no text output.", resp.Content)
 	})
 
 	t.Run("ModelCfg.MaxTokens overrides default", func(t *testing.T) {

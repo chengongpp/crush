@@ -21,6 +21,7 @@ import (
 	"github.com/charmbracelet/crush/internal/agent"
 	"github.com/charmbracelet/crush/internal/agent/notify"
 	"github.com/charmbracelet/crush/internal/agent/tools/mcp"
+	"github.com/charmbracelet/crush/internal/clipboard"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/db"
 	"github.com/charmbracelet/crush/internal/event"
@@ -122,6 +123,12 @@ func New(ctx context.Context, conn *sql.DB, store *config.ConfigStore, skillsMgr
 
 	app.setupEvents()
 
+	// Initialize clipboard support. This is best-effort; if it fails
+	// (e.g., headless environment), clipboard operations will return nil.
+	if err := clipboard.Init(); err != nil {
+		slog.Warn("Clipboard initialization failed", "error", err)
+	}
+
 	// Check for updates in the background.
 	go app.checkForUpdates(ctx)
 
@@ -183,6 +190,14 @@ func (app *App) SendEvent(msg tea.Msg) {
 // AgentNotifications returns the broker for agent notification events.
 func (app *App) AgentNotifications() *pubsub.Broker[notify.Notification] {
 	return app.agentNotifications
+}
+
+// RunCompletions returns the broker for the authoritative per-run
+// terminal RunComplete events. The dispatcher (backend.runAgent) uses
+// it to emit a reliable terminal event when a run fails before the
+// coordinator could publish one of its own.
+func (app *App) RunCompletions() *pubsub.Broker[notify.RunComplete] {
+	return app.runCompletions
 }
 
 // resolveSession resolves which session to use for a non-interactive run

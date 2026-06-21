@@ -95,7 +95,7 @@ type ProviderConfig struct {
 	// The provider's API endpoint.
 	BaseURL string `json:"base_url,omitempty" jsonschema:"description=Base URL for the provider's API,format=uri,example=https://api.openai.com/v1"`
 	// The provider type, e.g. "openai", "anthropic", etc. if empty it defaults to openai.
-	Type catwalk.Type `json:"type,omitempty" jsonschema:"description=Provider type that determines the API format,enum=openai,enum=openai-compat,enum=anthropic,enum=gemini,enum=azure,enum=vertexai,default=openai"`
+	Type catwalk.Type `json:"type,omitempty" jsonschema:"description=Provider type that determines the API format,default=openai"`
 	// The provider's API key.
 	APIKey string `json:"api_key,omitempty" jsonschema:"description=API key for authentication with the provider,example=$OPENAI_API_KEY"`
 	// The original API key template before resolution (for re-resolution on auth errors).
@@ -132,6 +132,13 @@ type ProviderConfig struct {
 
 	// Skip cost accumulation for this provider when using subscription or flat rate billing.
 	FlatRate bool `json:"flat_rate,omitempty" jsonschema:"description=Flat-rate mode for this provider"`
+
+	// AutoDiscoverModels controls model discovery via /v1/models endpoint.
+	// When Models is empty and this is nil or true, Crush auto-discovers
+	// models. When true and Models is non-empty, discovered models are
+	// merged in (user-specified models take precedence). When false,
+	// only explicitly listed models are used.
+	AutoDiscoverModels *bool `json:"discover_models,omitempty" jsonschema:"description=Auto-discover models from /v1/models endpoint. When true with existing models they are merged (yours win),default=true"`
 
 	// The provider models
 	Models []catwalk.Model `json:"models,omitempty" jsonschema:"description=List of models available from this provider"`
@@ -260,6 +267,7 @@ func (Attribution) JSONSchemaExtend(schema *jsonschema.Schema) {
 
 type Options struct {
 	ContextPaths         []string    `json:"context_paths,omitempty" jsonschema:"description=Paths to files containing context information for the AI,example=.cursorrules,example=CRUSH.md"`
+	GlobalContextPaths   []string    `json:"global_context_paths,omitempty" jsonschema:"description=Paths to files containing global context information for the AI,default=~/.config/crush/CRUSH.md,default=~/.config/AGENTS.md"`
 	SkillsPaths          []string    `json:"skills_paths,omitempty" jsonschema:"description=Paths to directories containing Agent Skills (folders with SKILL.md files),example=~/.config/crush/skills,example=./skills"`
 	TUI                  *TUIOptions `json:"tui,omitempty" jsonschema:"description=Terminal user interface options"`
 	Debug                bool        `json:"debug,omitempty" jsonschema:"description=Enable debug logging,default=false"`
@@ -545,12 +553,23 @@ func (t ToolGrep) GetTimeout() time.Duration {
 // is owned by hooks.Runner so a JSON round-trip, merge, or reload can't
 // silently drop compiled state.
 type HookConfig struct {
+	// Friendly display name shown in the TUI. Falls back to Command when empty.
+	Name string `json:"name,omitempty" jsonschema:"description=Friendly display name shown in the TUI for this hook"`
 	// Regex pattern tested against the tool name. Empty means match all.
 	Matcher string `json:"matcher,omitempty" jsonschema:"description=Regex pattern tested against the tool name. Empty means match all tools."`
 	// Shell command to execute.
 	Command string `json:"command" jsonschema:"required,description=Shell command to execute when the hook fires"`
 	// Timeout in seconds. Default 30.
 	Timeout int `json:"timeout,omitempty" jsonschema:"description=Timeout in seconds for the hook command,default=30"`
+}
+
+// DisplayName returns the hook name for display purposes. It returns Name
+// when set, otherwise falls back to Command.
+func (h *HookConfig) DisplayName() string {
+	if h.Name != "" {
+		return h.Name
+	}
+	return h.Command
 }
 
 // TimeoutDuration returns the hook timeout as a time.Duration, defaulting
