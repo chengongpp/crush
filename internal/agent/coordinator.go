@@ -18,12 +18,12 @@ import (
 
 	"charm.land/catwalk/pkg/catwalk"
 	"charm.land/fantasy"
+	"github.com/charmbracelet/crush/internal/agent/filestatecache"
 	"github.com/charmbracelet/crush/internal/agent/hyper"
 	"github.com/charmbracelet/crush/internal/agent/notify"
 	"github.com/charmbracelet/crush/internal/agent/prompt"
 	"github.com/charmbracelet/crush/internal/agent/tools"
 	"github.com/charmbracelet/crush/internal/config"
-	"github.com/charmbracelet/crush/internal/agent/filestatecache"
 	"github.com/charmbracelet/crush/internal/discover"
 	"github.com/charmbracelet/crush/internal/event"
 	"github.com/charmbracelet/crush/internal/filetracker"
@@ -197,7 +197,6 @@ func NewCoordinator(
 	c.fireSessionStart(ctx)
 	return c, nil
 }
-
 
 // fireSessionStart runs SessionStart hooks configured in crush.json. These
 // hooks run once when the coordinator initializes, before any user message.
@@ -700,7 +699,19 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 		tools.NewLsTool(c.permissions, c.cfg.WorkingDir(), c.cfg.Config().Tools.Ls),
 		tools.NewSourcegraphTool(nil),
 		tools.NewTodosTool(c.sessions),
-		tools.NewViewTool(c.lspManager, c.permissions, c.filetracker, c.skillTracker, c.cfg.WorkingDir(), c.cfg.Config().Options.SkillsPaths...),
+	)
+
+	// Build vision client for image description when the primary model
+	// does not support images.
+	visionClient, err := c.buildVisionClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build vision client: %w", err)
+	}
+
+	allTools = append(
+		allTools,
+		tools.NewViewTool(c.lspManager, c.permissions, c.filetracker, c.skillTracker, visionClient, c.cfg.WorkingDir(), c.cfg.Config().Options.SkillsPaths...),
+		tools.NewReadTool(c.lspManager, c.permissions, c.filetracker, c.skillTracker, visionClient, c.cfg.WorkingDir(), c.cfg.Config().Options.SkillsPaths...),
 		tools.NewWriteTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir()),
 	)
 
@@ -855,6 +866,28 @@ func (c *coordinator) buildAgentModels(ctx context.Context, isSubAgent bool) (Mo
 			ModelCfg:   smallModelCfg,
 			FlatRate:   smallProviderCfg.FlatRate,
 		}, nil
+}
+
+// buildVisionClient creates a VisionClient from the configured vision model.
+// Returns nil if no vision model is configured.
+func (c *coordinator) buildVisionClient(ctx context.Context) (*tools.VisionClient, error) {
+	vm := c.cfg.Config().Options.VisionModel
+	if vm == nil {
+		return nil, nil
+	}
+	providerCfg, ok := c.cfg.Config().Providers.Get(vm.Provider)
+	if !ok {
+		return nil, fmt.Errorf("vision model provider not found: %s", vm.Provider)
+	}
+	provider, err := c.buildProvider(providerCfg, *vm, false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build vision model provider: %w", err)
+	}
+	langModel, err := provider.LanguageModel(ctx, vm.Model)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get vision language model: %w", err)
+	}
+	return tools.NewVisionClient(langModel), nil
 }
 
 func (c *coordinator) buildAnthropicProvider(baseURL, apiKey string, headers map[string]string, providerID string) (fantasy.Provider, error) {

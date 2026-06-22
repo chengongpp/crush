@@ -198,6 +198,7 @@ type SourcegraphResponseMetadata struct {
 }
 
 const ViewToolName = "view"
+const ReadToolName = "read"
 
 // ViewParams represents the parameters for the view tool.
 type ViewParams struct {

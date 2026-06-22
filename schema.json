@@ -109,6 +109,10 @@
           },
           "type": "object",
           "description": "User-defined shell commands that fire on hook events (e.g. PreToolUse)"
+        },
+        "bots": {
+          "$ref": "#/$defs/BotsConfig",
+          "description": "Bot bridge configurations"
         }
       },
       "additionalProperties": false,
@@ -541,6 +545,10 @@
           },
           "type": "array",
           "description": "List of skill names to disable and hide from the agent"
+        },
+        "vision_model": {
+          "$ref": "#/$defs/SelectedModel",
+          "description": "Vision model that describes images for non-vision models. When set"
         }
       },
       "additionalProperties": false,
