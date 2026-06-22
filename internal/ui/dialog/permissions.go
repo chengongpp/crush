@@ -477,7 +477,7 @@ func (p *Permissions) renderHeader(contentWidth int) string {
 			lines = append(lines, p.renderKeyValue("URL", params.URL, contentWidth))
 			lines = append(lines, p.renderKeyValue("File", fsext.PrettyPath(params.FilePath), contentWidth))
 		}
-	case tools.EditToolName, tools.WriteToolName, tools.MultiEditToolName, tools.ViewToolName, tools.ReplaceSymbolToolName:
+	case tools.EditToolName, tools.WriteToolName, tools.MultiEditToolName, tools.ViewToolName, tools.ReadToolName, tools.ReplaceSymbolToolName:
 		var filePath string
 		switch params := p.permission.Params.(type) {
 		case tools.EditPermissionsParams:
