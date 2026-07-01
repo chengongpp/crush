@@ -609,6 +609,7 @@
             "google-vertex",
             "hyper",
             "litellm",
+            "llamacpp",
             "lmstudio",
             "ollama",
             "omlx"
@@ -773,6 +774,16 @@
           "type": "boolean",
           "description": "Enable transparent background for the TUI interface",
           "default": false
+        },
+        "scrollbar": {
+          "type": "string",
+          "enum": [
+            "default",
+            "always",
+            "never"
+          ],
+          "description": "Chat scrollbar visibility",
+          "default": "default"
         }
       },
       "additionalProperties": false,
@@ -801,6 +812,16 @@
         "expires_in",
         "expires_at"
       ]
+    },
+    "ToolGlob": {
+      "properties": {
+        "timeout": {
+          "type": "integer",
+          "description": "Timeout for the glob tool call"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
     },
     "ToolGrep": {
       "properties": {
@@ -841,6 +862,9 @@
         },
         "grep": {
           "$ref": "#/$defs/ToolGrep"
+        },
+        "glob": {
+          "$ref": "#/$defs/ToolGlob"
         }
       },
       "additionalProperties": false,
