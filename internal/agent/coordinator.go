@@ -1189,7 +1189,7 @@ func (c *coordinator) buildProvider(providerCfg config.ProviderConfig, model con
 // Read-only tools are safe for parallel execution by the fantasy agent loop.
 func isReadOnlyTool(name string) bool {
 	switch name {
-	case "glob", "grep", "ls", "view",
+	case "glob", "grep", "ls", "read", "view",
 		"sourcegraph",
 		"lsp_diagnostics", "lsp_references",
 		"list_mcp_resources", "read_mcp_resource",
