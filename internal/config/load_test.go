@@ -9,12 +9,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
 	"charm.land/catwalk/pkg/catwalk"
 	"github.com/charmbracelet/crush/internal/csync"
 	"github.com/charmbracelet/crush/internal/env"
+	"github.com/charmbracelet/crush/internal/oauth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -131,6 +133,18 @@ func TestLookupConfigs_BoundedByProject(t *testing.T) {
 		require.Contains(t, got, GlobalConfig())
 		require.Contains(t, got, GlobalConfigData())
 	})
+
+	t.Run("system config is loaded first", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("system config not supported on Windows")
+		}
+
+		got := lookupConfigs(t.TempDir())
+		require.NotEmpty(t, got)
+		// The system-wide config must be first so it has the lowest
+		// priority when configs are merged.
+		require.Equal(t, "/etc/crush/crush.json", got[0])
+	})
 }
 
 func TestLoadFromConfigPaths_InvalidJSON(t *testing.T) {
@@ -192,6 +206,24 @@ func TestConfig_setDefaults(t *testing.T) {
 		require.NotNil(t, cfg.Bots)
 		require.NotNil(t, cfg.Bots.WeCom)
 		require.Equal(t, "wss://openws.work.weixin.qq.com", cfg.Bots.WeCom.WebSocketURL)
+	})
+
+	t.Run("prunes orphaned OAuth token MCP entries but keeps real ones", func(t *testing.T) {
+		cfg := &Config{
+			MCP: map[string]MCPConfig{
+				"orphan":     {OAuthToken: &oauth.Token{AccessToken: "stale"}},
+				"real-http":  {Type: MCPHttp, URL: "https://example.com/mcp", OAuthToken: &oauth.Token{AccessToken: "live"}},
+				"real-stdio": {Type: MCPStdio, Command: "npx"},
+				"malformed":  {Command: "npx"}, // missing type but has a command: surface the error, don't prune
+			},
+		}
+
+		cfg.setDefaults(t.TempDir(), "")
+
+		require.NotContains(t, cfg.MCP, "orphan", "orphaned token entry should be pruned")
+		require.Contains(t, cfg.MCP, "real-http")
+		require.Contains(t, cfg.MCP, "real-stdio")
+		require.Contains(t, cfg.MCP, "malformed", "malformed entry should survive so its error surfaces")
 	})
 
 	t.Run("resolves relative configured data directory from working directory", func(t *testing.T) {
@@ -714,7 +746,7 @@ func TestConfig_setupAgentsWithNoDisabledTools(t *testing.T) {
 
 	taskAgent, ok := cfg.Agents[AgentTask]
 	require.True(t, ok)
-	assert.Equal(t, []string{"glob", "grep", "ls", "read", "sourcegraph", "view"}, taskAgent.AllowedTools)
+	assert.Equal(t, []string{"lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "glob", "grep", "ls", "read", "sourcegraph", "view"}, taskAgent.AllowedTools)
 }
 
 func TestConfig_setupAgentsWithDisabledTools(t *testing.T) {
@@ -732,11 +764,11 @@ func TestConfig_setupAgentsWithDisabledTools(t *testing.T) {
 	coderAgent, ok := cfg.Agents[AgentCoder]
 	require.True(t, ok)
 
-	assert.Equal(t, []string{"agent", "bash", "crush_info", "crush_logs", "job_output", "job_kill", "multiedit", "lsp_diagnostics", "lsp_references", "lsp_restart", "fetch", "agentic_fetch", "glob", "ls", "read", "sourcegraph", "todos", "view", "write", "list_mcp_resources", "read_mcp_resource", "task_create", "task_get", "task_list", "task_update"}, coderAgent.AllowedTools)
+	assert.Equal(t, []string{"agent", "bash", "crush_info", "crush_logs", "job_output", "job_kill", "multiedit", "lsp_diagnostics", "lsp_references", "lsp_restart", "lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "lsp_rename", "lsp_replace_symbol", "fetch", "agentic_fetch", "glob", "ls", "question", "read", "sourcegraph", "todos", "view", "write", "list_mcp_resources", "read_mcp_resource", "task_create", "task_get", "task_list", "task_update"}, coderAgent.AllowedTools)
 
 	taskAgent, ok := cfg.Agents[AgentTask]
 	require.True(t, ok)
-	assert.Equal(t, []string{"glob", "ls", "read", "sourcegraph", "view"}, taskAgent.AllowedTools)
+	assert.Equal(t, []string{"lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "glob", "ls", "read", "sourcegraph", "view"}, taskAgent.AllowedTools)
 }
 
 func TestConfig_setupAgentsWithEveryReadOnlyToolDisabled(t *testing.T) {
@@ -746,6 +778,9 @@ func TestConfig_setupAgentsWithEveryReadOnlyToolDisabled(t *testing.T) {
 				"glob",
 				"grep",
 				"ls",
+				"lsp_call_hierarchy",
+				"lsp_definition",
+				"lsp_symbols",
 				"read",
 				"sourcegraph",
 				"view",
@@ -756,7 +791,7 @@ func TestConfig_setupAgentsWithEveryReadOnlyToolDisabled(t *testing.T) {
 	cfg.SetupAgents()
 	coderAgent, ok := cfg.Agents[AgentCoder]
 	require.True(t, ok)
-	assert.Equal(t, []string{"agent", "bash", "crush_info", "crush_logs", "job_output", "job_kill", "download", "edit", "multiedit", "lsp_diagnostics", "lsp_references", "lsp_restart", "fetch", "agentic_fetch", "todos", "write", "list_mcp_resources", "read_mcp_resource", "task_create", "task_get", "task_list", "task_update"}, coderAgent.AllowedTools)
+	assert.Equal(t, []string{"agent", "bash", "crush_info", "crush_logs", "job_output", "job_kill", "download", "edit", "multiedit", "lsp_diagnostics", "lsp_references", "lsp_restart", "lsp_rename", "lsp_replace_symbol", "fetch", "agentic_fetch", "question", "todos", "write", "list_mcp_resources", "read_mcp_resource", "task_create", "task_get", "task_list", "task_update"}, coderAgent.AllowedTools)
 
 	taskAgent, ok := cfg.Agents[AgentTask]
 	require.True(t, ok)
