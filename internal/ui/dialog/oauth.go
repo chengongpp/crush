@@ -48,6 +48,7 @@ type OAuth struct {
 	provider      catwalk.Provider
 	model         config.SelectedModel
 	modelType     config.SelectedModelType
+	isVision      bool
 	oAuthProvider OAuthProvider
 
 	State OAuthState
@@ -80,6 +81,7 @@ func newOAuth(
 	provider catwalk.Provider,
 	model config.SelectedModel,
 	modelType config.SelectedModelType,
+	isVision bool,
 	oAuthProvider OAuthProvider,
 ) (*OAuth, tea.Cmd) {
 	t := com.Styles
@@ -90,6 +92,7 @@ func newOAuth(
 	m.provider = provider
 	m.model = model
 	m.modelType = modelType
+	m.isVision = isVision
 	m.oAuthProvider = oAuthProvider
 	m.width = 0 // Set dynamically in Draw().
 	m.State = OAuthStateInitializing
@@ -471,5 +474,6 @@ func (m *OAuth) confirmAndSelectModel() Action {
 		Provider:  m.provider,
 		Model:     m.model,
 		ModelType: m.modelType,
+		IsVision:  m.isVision,
 	}
 }

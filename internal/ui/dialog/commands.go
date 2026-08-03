@@ -446,8 +446,21 @@ func (c *Commands) setCommandItems(commandType CommandType) {
 func (c *Commands) defaultCommands() []*CommandItem {
 	commands := []*CommandItem{
 		NewCommandItem(c.com.Styles, "new_session", "New Session", "ctrl+n", ActionNewSession{}).WithAliases("clear"),
-		NewCommandItem(c.com.Styles, "switch_session", "Sessions", "ctrl+s", ActionOpenDialog{SessionsID}),
-		NewCommandItem(c.com.Styles, "switch_model", "Switch Model", "ctrl+l", ActionOpenDialog{ModelsID}),
+		NewCommandItem(c.com.Styles, "switch_session", "Sessions", "ctrl+s", ActionOpenDialog{DialogID: SessionsID}),
+		NewCommandItem(c.com.Styles, "switch_model", "Switch Model", "ctrl+l", ActionOpenDialog{DialogID: ModelsID}),
+	}
+
+	// Vision model picker. A separate "disable" entry appears only when a
+	// vision model is currently configured.
+	cfgVision := c.com.Config()
+	visionConfigured := cfgVision != nil && cfgVision.Options != nil && cfgVision.Options.VisionModel != nil
+	visionLabel := "Vision Model"
+	if visionConfigured {
+		visionLabel = "Change Vision Model"
+	}
+	commands = append(commands, NewCommandItem(c.com.Styles, "switch_vision_model", visionLabel, "", ActionOpenDialog{DialogID: ModelsID, Vision: true}))
+	if visionConfigured {
+		commands = append(commands, NewCommandItem(c.com.Styles, "disable_vision_model", "Disable Vision Model", "", ActionDisableVisionModel{}))
 	}
 
 	// Only show compact command if there's an active session

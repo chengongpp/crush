@@ -23,6 +23,7 @@ type ModelType int
 const (
 	ModelTypeLarge ModelType = iota
 	ModelTypeSmall
+	ModelTypeVision
 )
 
 // String returns the string representation of the [ModelType].
@@ -32,9 +33,17 @@ func (mt ModelType) String() string {
 		return "Large Task"
 	case ModelTypeSmall:
 		return "Small Task"
+	case ModelTypeVision:
+		return "Vision"
 	default:
 		return "Unknown"
 	}
+}
+
+// IsVision reports whether the model type is the vision model used to
+// describe images for non-vision models.
+func (mt ModelType) IsVision() bool {
+	return mt == ModelTypeVision
 }
 
 // Config returns the corresponding config model type.
@@ -56,6 +65,8 @@ func (mt ModelType) Placeholder() string {
 		return largeModelInputPlaceholder
 	case ModelTypeSmall:
 		return smallModelInputPlaceholder
+	case ModelTypeVision:
+		return visionModelInputPlaceholder
 	default:
 		return ""
 	}
@@ -65,6 +76,7 @@ const (
 	onboardingModelInputPlaceholder = "Find your fave"
 	largeModelInputPlaceholder      = "Choose a model for large, complex tasks"
 	smallModelInputPlaceholder      = "Choose a model for small, simple tasks"
+	visionModelInputPlaceholder     = "Choose a model to describe images for the main model"
 )
 
 // ModelsID is the identifier for the model selection dialog.
@@ -97,11 +109,12 @@ type Models struct {
 var _ Dialog = (*Models)(nil)
 
 // NewModels creates a new Models dialog.
-func NewModels(com *common.Common, isOnboarding bool) (*Models, error) {
+func NewModels(com *common.Common, isOnboarding bool, modelType ModelType) (*Models, error) {
 	t := com.Styles
 	m := &Models{}
 	m.com = com
 	m.isOnboarding = isOnboarding
+	m.modelType = modelType
 
 	help := help.New()
 	help.Styles = t.DialogHelpStyles()
@@ -207,16 +220,14 @@ func (m *Models) HandleMsg(msg tea.Msg) Action {
 				Model:          modelItem.SelectedModel(),
 				ModelType:      modelItem.SelectedModelType(),
 				ReAuthenticate: isEdit,
+				IsVision:       m.modelType.IsVision(),
 			}
 		case key.Matches(msg, m.keyMap.Tab):
 			if m.isOnboarding {
 				break
 			}
-			if m.modelType == ModelTypeLarge {
-				m.modelType = ModelTypeSmall
-			} else {
-				m.modelType = ModelTypeLarge
-			}
+			// Cycle through large, small, and vision model types.
+			m.modelType = (m.modelType + 1) % 3
 			if err := m.setProviderItems(); err != nil {
 				return util.ReportError(err)
 			}
@@ -243,20 +254,19 @@ func (m *Models) Cursor() *tea.Cursor {
 func (m *Models) modelTypeRadioView() string {
 	t := m.com.Styles
 	textStyle := t.Radio.Label
-	largeRadioStyle := t.Radio.Off
-	smallRadioStyle := t.Radio.Off
-	if m.modelType == ModelTypeLarge {
-		largeRadioStyle = t.Radio.On
-	} else {
-		smallRadioStyle = t.Radio.On
+
+	radio := func(mt ModelType) string {
+		style := t.Radio.Off
+		if m.modelType == mt {
+			style = t.Radio.On
+		}
+		return style.Padding(0, 1).Render()
 	}
 
-	largeRadio := largeRadioStyle.Padding(0, 1).Render()
-	smallRadio := smallRadioStyle.Padding(0, 1).Render()
-
-	return fmt.Sprintf("%s%s  %s%s",
-		largeRadio, textStyle.Render(ModelTypeLarge.String()),
-		smallRadio, textStyle.Render(ModelTypeSmall.String()))
+	return fmt.Sprintf("%s%s  %s%s  %s%s",
+		radio(ModelTypeLarge), textStyle.Render(ModelTypeLarge.String()),
+		radio(ModelTypeSmall), textStyle.Render(ModelTypeSmall.String()),
+		radio(ModelTypeVision), textStyle.Render(ModelTypeVision.String()))
 }
 
 // Draw implements [Dialog].
@@ -350,6 +360,9 @@ func (m *Models) setProviderItems() error {
 	var selectedItemID string
 	selectedType := m.modelType.Config()
 	currentModel := cfg.Models[selectedType]
+	if m.modelType.IsVision() && cfg.Options != nil && cfg.Options.VisionModel != nil {
+		currentModel = *cfg.Options.VisionModel
+	}
 	recentItems := cfg.RecentModels[selectedType]
 
 	// Track providers already added to avoid duplicates

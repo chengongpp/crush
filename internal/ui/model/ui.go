@@ -508,7 +508,7 @@ func New(com *common.Common, initialSessionID string, continueLast bool) *UI {
 func (m *UI) Init() tea.Cmd {
 	var cmds []tea.Cmd
 	if m.state == uiOnboarding {
-		if cmd := m.openModelsDialog(); cmd != nil {
+		if cmd := m.openModelsDialog(false); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 	}
@@ -1810,7 +1810,7 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 		m.dialog.CloseFrontDialog()
 
 		if isOnboarding {
-			if cmd := m.openModelsDialog(); cmd != nil {
+			if cmd := m.openModelsDialog(false); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
 		}
@@ -1831,7 +1831,7 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 	// Open dialog message.
 	case dialog.ActionOpenDialog:
 		m.dialog.CloseDialog(dialog.CommandsID)
-		if cmd := m.openDialog(msg.DialogID); cmd != nil {
+		if cmd := m.openDialog(msg.DialogID, msg.Vision); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 
@@ -1942,6 +1942,17 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 			return util.NewInfoMsg("Transparent background " + status)
 		})
 		m.dialog.CloseDialog(dialog.CommandsID)
+	case dialog.ActionDisableVisionModel:
+		m.dialog.CloseDialog(dialog.CommandsID)
+		cmds = append(cmds, m.updateAgentModelCmd(func() tea.Msg {
+			if err := m.com.Workspace.RemoveConfigField(config.ScopeGlobal, "options.vision_model"); err != nil {
+				return util.ReportError(err)
+			}
+			if err := m.com.Workspace.UpdateAgentModel(context.TODO()); err != nil {
+				return util.ReportError(err)
+			}
+			return util.NewInfoMsg("Vision model disabled")
+		}))
 	case dialog.ActionQuit:
 		cmds = append(cmds, tea.Quit)
 	case dialog.ActionEnableDockerMCP:
@@ -2156,6 +2167,34 @@ func (m *UI) handleSelectModel(msg dialog.ActionSelectModel) tea.Cmd {
 		isOnboarding = m.state == uiOnboarding
 	)
 
+	// Vision model selection: stored under options.vision_model and used to
+	// describe images for non-vision models.
+	if msg.IsVision {
+		if !isConfigured() || msg.ReAuthenticate {
+			m.dialog.CloseDialog(dialog.ModelsID)
+			if cmd := m.openAuthenticationDialog(msg.Provider, msg.Model, msg.ModelType, true); cmd != nil {
+				return cmd
+			}
+			return nil
+		}
+
+		if err := m.com.Workspace.SetConfigField(config.ScopeGlobal, "options.vision_model", msg.Model); err != nil {
+			return util.ReportError(err)
+		}
+		m.dialog.CloseDialog(dialog.ModelsID)
+
+		modelName := msg.Model.Model
+		if catwalkModel := cfg.GetModel(msg.Model.Provider, msg.Model.Model); catwalkModel != nil && catwalkModel.Name != "" {
+			modelName = catwalkModel.Name
+		}
+		return m.updateAgentModelCmd(func() tea.Msg {
+			if err := m.com.Workspace.UpdateAgentModel(context.TODO()); err != nil {
+				return util.ReportError(err)
+			}
+			return util.NewInfoMsg("Vision model changed to " + modelName)
+		})
+	}
+
 	// For Hyper, if the stored OAuth token is expired, try a silent
 	// refresh before deciding whether the provider is configured. Keeps
 	// users from hitting a 401 on their first message after the
@@ -2173,7 +2212,7 @@ func (m *UI) handleSelectModel(msg dialog.ActionSelectModel) tea.Cmd {
 
 	if !isConfigured() || msg.ReAuthenticate {
 		m.dialog.CloseDialog(dialog.ModelsID)
-		if cmd := m.openAuthenticationDialog(msg.Provider, msg.Model, msg.ModelType); cmd != nil {
+		if cmd := m.openAuthenticationDialog(msg.Provider, msg.Model, msg.ModelType, false); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 		return tea.Batch(cmds...)
@@ -2239,7 +2278,7 @@ func (m *UI) handleSelectModel(msg dialog.ActionSelectModel) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-func (m *UI) openAuthenticationDialog(provider catwalk.Provider, model config.SelectedModel, modelType config.SelectedModelType) tea.Cmd {
+func (m *UI) openAuthenticationDialog(provider catwalk.Provider, model config.SelectedModel, modelType config.SelectedModelType, isVision bool) tea.Cmd {
 	var (
 		dlg dialog.Dialog
 		cmd tea.Cmd
@@ -2249,11 +2288,11 @@ func (m *UI) openAuthenticationDialog(provider catwalk.Provider, model config.Se
 
 	switch provider.ID {
 	case "hyper":
-		dlg, cmd = dialog.NewOAuthHyper(m.com, isOnboarding, provider, model, modelType)
+		dlg, cmd = dialog.NewOAuthHyper(m.com, isOnboarding, provider, model, modelType, isVision)
 	case catwalk.InferenceProviderCopilot:
-		dlg, cmd = dialog.NewOAuthCopilot(m.com, isOnboarding, provider, model, modelType)
+		dlg, cmd = dialog.NewOAuthCopilot(m.com, isOnboarding, provider, model, modelType, isVision)
 	default:
-		dlg, cmd = dialog.NewAPIKeyInput(m.com, isOnboarding, provider, model, modelType)
+		dlg, cmd = dialog.NewAPIKeyInput(m.com, isOnboarding, provider, model, modelType, isVision)
 	}
 
 	if m.dialog.ContainsDialog(dlg.ID()) {
@@ -2280,7 +2319,7 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			return true
 		case key.Matches(msg, m.keyMap.Models):
-			if cmd := m.openModelsDialog(); cmd != nil {
+			if cmd := m.openModelsDialog(false); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
 			return true
@@ -4179,8 +4218,9 @@ func (m *UI) cancelAgent() tea.Cmd {
 	return cancelTimerCmd()
 }
 
-// openDialog opens a dialog by its ID.
-func (m *UI) openDialog(id string) tea.Cmd {
+// openDialog opens a dialog by its ID. vision opens the models dialog in
+// vision model selection mode.
+func (m *UI) openDialog(id string, vision bool) tea.Cmd {
 	var cmds []tea.Cmd
 	switch id {
 	case dialog.SessionsID:
@@ -4188,7 +4228,7 @@ func (m *UI) openDialog(id string) tea.Cmd {
 			cmds = append(cmds, cmd)
 		}
 	case dialog.ModelsID:
-		if cmd := m.openModelsDialog(); cmd != nil {
+		if cmd := m.openModelsDialog(vision); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 	case dialog.CommandsID:
@@ -4231,8 +4271,9 @@ func (m *UI) openQuitDialog() tea.Cmd {
 	return nil
 }
 
-// openModelsDialog opens the models dialog.
-func (m *UI) openModelsDialog() tea.Cmd {
+// openModelsDialog opens the models dialog. vision selects the vision model
+// used to describe images for non-vision models.
+func (m *UI) openModelsDialog(vision bool) tea.Cmd {
 	if m.dialog.ContainsDialog(dialog.ModelsID) {
 		// Bring to front
 		m.dialog.BringToFront(dialog.ModelsID)
@@ -4240,7 +4281,11 @@ func (m *UI) openModelsDialog() tea.Cmd {
 	}
 
 	isOnboarding := m.state == uiOnboarding
-	modelsDialog, err := dialog.NewModels(m.com, isOnboarding)
+	modelType := dialog.ModelTypeLarge
+	if vision {
+		modelType = dialog.ModelTypeVision
+	}
+	modelsDialog, err := dialog.NewModels(m.com, isOnboarding, modelType)
 	if err != nil {
 		return util.ReportError(err)
 	}
@@ -4494,7 +4539,7 @@ func (m *UI) handleReAuthenticate(providerID string) tea.Cmd {
 	if !ok {
 		return nil
 	}
-	return m.openAuthenticationDialog(providerCfg.ToProvider(), cfg.Models[agentCfg.Model], agentCfg.Model)
+	return m.openAuthenticationDialog(providerCfg.ToProvider(), cfg.Models[agentCfg.Model], agentCfg.Model, false)
 }
 
 // handleAWSSSOAuth opens the AWS SSO progress dialog (or updates the SSO URL

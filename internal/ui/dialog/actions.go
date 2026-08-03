@@ -29,6 +29,8 @@ type ActionQuit = tea.QuitMsg
 // ActionOpenDialog is a message to open a dialog.
 type ActionOpenDialog struct {
 	DialogID string
+	// Vision opens the models dialog in vision model selection mode.
+	Vision bool
 }
 
 // ActionSelectSession is a message indicating a session has been selected.
@@ -42,6 +44,9 @@ type ActionSelectModel struct {
 	Model          config.SelectedModel
 	ModelType      config.SelectedModelType
 	ReAuthenticate bool
+	// IsVision marks the selection as the vision model used to describe
+	// images for non-vision models.
+	IsVision bool
 }
 
 // Messages for commands
@@ -59,6 +64,7 @@ type (
 	}
 	ActionToggleTransparentBackground struct{}
 	ActionInitializeProject           struct{}
+	ActionDisableVisionModel          struct{}
 	ActionSummarize                   struct {
 		SessionID string
 	}
