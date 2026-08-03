@@ -113,6 +113,13 @@
         "bots": {
           "$ref": "#/$defs/BotsConfig",
           "description": "Bot bridge configurations"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object",
+          "description": "Environment variables to set on startup"
         }
       },
       "additionalProperties": false,
@@ -557,12 +564,7 @@
           "description": "Show indeterminate progress updates during long operations",
           "default": true
         },
-        "disable_notifications": {
-          "type": "boolean",
-          "description": "Deprecated: Use notification_style instead. Disable desktop notifications",
-          "default": false
-        },
-        "notification_style": {
+        "notifications": {
           "type": "string",
           "enum": [
             "auto",
@@ -571,7 +573,7 @@
             "bell",
             "disabled"
           ],
-          "description": "Notification style to use. Options: auto (default)",
+          "description": "Notification style to use. Options: auto (default), native, osc, bell, disabled. Auto selects based on environment: native for local sessions, osc for SSH (with automatic OSC 99/777 detection).",
           "default": "auto"
         },
         "disabled_skills": {
@@ -689,6 +691,10 @@
         "provider_options": {
           "type": "object",
           "description": "Additional provider-specific options for this provider"
+        },
+        "aws_auth_refresh": {
+          "type": "string",
+          "description": "Shell command to run when AWS credentials expire (Bedrock only)."
         },
         "flat_rate": {
           "type": "boolean",
