@@ -1,1 +1,1 @@
-Get stdout/stderr from a background shell by ID; set wait=true to block until completion.
+Get stdout/stderr from a background shell by ID; set wait=true to block until completion. When wait is true, the call returns as soon as the shell completes, the timeout (default 30 seconds, override with timeout_seconds) elapses, or the user cancels — whichever comes first. On timeout the output available so far is returned with a notice, and the shell keeps running in the background.
