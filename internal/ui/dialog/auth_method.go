@@ -45,6 +45,7 @@ type AuthMethod struct {
 	provider     catwalk.Provider
 	model        config.SelectedModel
 	modelType    config.SelectedModelType
+	isVision     bool
 
 	selected       int
 	oauthCardArea  image.Rectangle
@@ -69,6 +70,7 @@ func NewAuthMethod(
 	provider catwalk.Provider,
 	model config.SelectedModel,
 	modelType config.SelectedModelType,
+	isVision bool,
 ) *AuthMethod {
 	m := &AuthMethod{
 		com:           com,
@@ -76,6 +78,7 @@ func NewAuthMethod(
 		provider:      provider,
 		model:         model,
 		modelType:     modelType,
+		isVision:      isVision,
 		lastClickCard: -1,
 	}
 
@@ -127,6 +130,7 @@ func (m *AuthMethod) HandleMsg(msg tea.Msg) Action {
 			Model:     m.model,
 			ModelType: m.modelType,
 			UseOAuth:  m.selected == 0,
+			IsVision:  m.isVision,
 		}
 	}
 	return nil
@@ -163,6 +167,7 @@ func (m *AuthMethod) handleMouseClick(msg tea.MouseClickMsg) Action {
 		Model:     m.model,
 		ModelType: m.modelType,
 		UseOAuth:  m.selected == 0,
+		IsVision:  m.isVision,
 	}
 }
 

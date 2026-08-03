@@ -21,8 +21,9 @@ func NewOAuthOpenAI(
 	provider catwalk.Provider,
 	model config.SelectedModel,
 	modelType config.SelectedModelType,
+	isVision bool,
 ) (*OAuth, tea.Cmd) {
-	return newOAuth(com, isOnboarding, provider, model, modelType, &OAuthOpenAI{})
+	return newOAuth(com, isOnboarding, provider, model, modelType, isVision, &OAuthOpenAI{})
 }
 
 type OAuthOpenAI struct {
