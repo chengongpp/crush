@@ -2,10 +2,12 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 	"testing"
 	"time"
 
+	"charm.land/fantasy"
 	"github.com/charmbracelet/crush/internal/shell"
 	"github.com/stretchr/testify/require"
 )
@@ -331,4 +333,52 @@ func TestBackgroundShell_AutoBackground(t *testing.T) {
 		require.True(t, ok, "Should be able to retrieve background shell")
 		require.Equal(t, bgShell.ID, retrieved.ID)
 	})
+}
+
+func runJobOutputTool(t *testing.T, shellID string, wait bool, timeoutSeconds *int) fantasy.ToolResponse {
+	t.Helper()
+	input := fmt.Sprintf(`{"shell_id": %q, "wait": %t}`, shellID, wait)
+	if timeoutSeconds != nil {
+		input = fmt.Sprintf(`{"shell_id": %q, "wait": %t, "timeout_seconds": %d}`, shellID, wait, *timeoutSeconds)
+	}
+	call := fantasy.ToolCall{
+		ID:    "test-call",
+		Name:  JobOutputToolName,
+		Input: input,
+	}
+	resp, err := NewJobOutputTool().Run(context.Background(), call)
+	require.NoError(t, err)
+	return resp
+}
+
+func TestJobOutputTool_WaitCompletion(t *testing.T) {
+	t.Parallel()
+
+	bgManager := shell.GetBackgroundShellManager()
+	bgShell, err := bgManager.Start(t.Context(), t.TempDir(), nil, "echo 'job done'", "")
+	require.NoError(t, err)
+	defer bgManager.Kill(bgShell.ID)
+
+	resp := runJobOutputTool(t, bgShell.ID, true, nil)
+	require.Contains(t, resp.Content, "Status: completed")
+	require.Contains(t, resp.Content, "job done")
+}
+
+func TestJobOutputTool_WaitTimeout(t *testing.T) {
+	t.Parallel()
+
+	bgManager := shell.GetBackgroundShellManager()
+	bgShell, err := bgManager.Start(t.Context(), t.TempDir(), nil, "echo 'early output'; sleep 30", "")
+	require.NoError(t, err)
+	defer bgManager.Kill(bgShell.ID)
+
+	timeout := 1
+	start := time.Now()
+	resp := runJobOutputTool(t, bgShell.ID, true, &timeout)
+	elapsed := time.Since(start)
+
+	require.Less(t, elapsed, 10*time.Second, "wait must return once the timeout elapses")
+	require.Contains(t, resp.Content, "Status: running")
+	require.Contains(t, resp.Content, "Timed out waiting for the command to finish after 1 seconds")
+	require.Contains(t, resp.Content, "early output")
 }
