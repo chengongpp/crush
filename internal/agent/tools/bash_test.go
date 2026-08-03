@@ -161,11 +161,27 @@ func TestBashTool_ChainedCommandsDenied(t *testing.T) {
 
 	resp := runBashTool(t, tool, ctx, BashParams{
 		Description: "chained ls denied",
-		Command:     "ls && rm -rf /",
+		Command:     "ls && echo done",
 	})
 
 	require.Equal(t, 1, perms.requestCount)
 	require.Contains(t, resp.Content, "User denied permission")
+}
+
+func TestBashTool_DestructiveCommandRejected(t *testing.T) {
+	workingDir := t.TempDir()
+	tool, perms := newBashToolWithRecordingPerms(workingDir, true)
+	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
+
+	// A catastrophic command is rejected before the permission layer, so
+	// no permission request is made even in allow mode.
+	resp := runBashTool(t, tool, ctx, BashParams{
+		Description: "destructive command",
+		Command:     "ls && rm -rf /",
+	})
+
+	require.Equal(t, 0, perms.requestCount)
+	require.Contains(t, resp.Content, "Refused to run a destructive command")
 }
 
 func runBashTool(t *testing.T, tool fantasy.AgentTool, ctx context.Context, params BashParams) fantasy.ToolResponse {
