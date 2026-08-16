@@ -90,10 +90,18 @@ var (
 	// in-flight attempt instead of letting it register a stale session.
 	gens = csync.NewMap[string, uint64]()
 
+	// suppressMus serializes browser-suppression per server so only one
+	// remote (server-driven) OAuth flow is active for a server at a time.
+	suppressMus = csync.NewMap[string, *sync.Mutex]()
+
 	// newSession creates a client session. It is a seam so tests can exercise
 	// renewal concurrency without spawning a real transport.
 	newSession = createSession
 )
+
+// suppressBrowserKey marks a context as requesting the OAuth handler not
+// open a local browser; the caller surfaces the authorization URL itself.
+type suppressBrowserKey struct{}
 
 // ArmInit marks that MCP initialization is expected so WaitForInit blocks
 // until it completes. Call this synchronously before launching Initialize in a
@@ -102,6 +110,16 @@ var (
 func ArmInit() {
 	initMu.Lock()
 	initStarted = true
+	initMu.Unlock()
+}
+
+// DisarmInit undoes ArmInit so WaitForInit stops blocking and returns
+// immediately. It exists for tests in other packages that arm the gate
+// without ever running Initialize and must not leak a permanently-blocking
+// gate into the rest of the test binary. Production code never needs it.
+func DisarmInit() {
+	initMu.Lock()
+	initStarted = false
 	initMu.Unlock()
 }
 
@@ -274,6 +292,7 @@ func Close(ctx context.Context) error {
 func Initialize(ctx context.Context, permissions permission.Service, cfg *config.ConfigStore) {
 	ArmInit()
 	slog.Info("Initializing MCP clients")
+	start := time.Now()
 
 	var wg sync.WaitGroup
 	// Initialize states for all configured MCPs
@@ -290,6 +309,10 @@ func Initialize(ctx context.Context, permissions permission.Service, cfg *config
 	}
 	wg.Wait()
 	initOnce.Do(func() { close(initDone) })
+	// Non-interactive runs wait for this to finish before sending a prompt, so
+	// the total is the floor on their startup latency. Interactive runs do not
+	// wait, but the total still explains when late-arriving tools show up.
+	slog.Debug("Finished initializing MCP clients", "duration", time.Since(start).Truncate(time.Millisecond).String())
 }
 
 // WaitForInit blocks until MCP initialization is complete, i.e. until
@@ -389,6 +412,73 @@ func PendingAuthMCPs(cfg *config.ConfigStore) []PendingAuthServer {
 		return strings.Compare(a.Name, b.Name)
 	})
 	return pending
+}
+
+// BeginAuth starts the OAuth flow for a server in StateNeedsAuth but
+// suppresses opening a local browser; the caller is responsible for
+// surfacing the authorization URL (via [MCPAuthURL]) to the user. It returns
+// a finish function that must be called exactly once with the request
+// context: finish blocks until the flow completes and returns the result.
+//
+// Only one browser-suppressed flow per server may be in progress. The
+// returned cancel function aborts the flow without waiting; use it when the
+// caller's context is cancelled.
+func BeginAuth(cfg *config.ConfigStore, name string) (finish func(ctx context.Context) error, cancel context.CancelFunc, err error) {
+	m, exists := cfg.Config().MCP[name]
+	if !exists {
+		return nil, nil, fmt.Errorf("mcp '%s' not found in configuration", name)
+	}
+	if !m.OAuth || m.Type != config.MCPHttp {
+		return nil, nil, fmt.Errorf("mcp '%s' does not use OAuth authentication", name)
+	}
+
+	lock := suppressLock(name)
+	if !lock.TryLock() {
+		return nil, nil, fmt.Errorf("mcp '%s' already has an authentication in progress", name)
+	}
+
+	flowCtx, flowCancel := context.WithCancel(context.Background())
+	flowCtx = mcpoauth.WithInteractive(flowCtx)
+	flowCtx = context.WithValue(flowCtx, suppressBrowserKey{}, true)
+
+	finish = func(ctx context.Context) error {
+		defer lock.Unlock()
+		defer flowCancel()
+
+		done := make(chan error, 1)
+		go func() {
+			done <- runAuthFlow(flowCtx, cfg, name, m)
+		}()
+
+		select {
+		case err := <-done:
+			return err
+		case <-ctx.Done():
+			flowCancel()
+			<-done
+			return ctx.Err()
+		}
+	}
+	return finish, flowCancel, nil
+}
+
+// runAuthFlow executes the OAuth connect for BeginAuth with browser
+// suppression enabled on the freshly created handler.
+func runAuthFlow(ctx context.Context, cfg *config.ConfigStore, name string, m config.MCPConfig) error {
+	updateState(name, StateStarting, nil, nil, Counts{}, withPending(m))
+	_, err := connectAndRegister(ctx, cfg, name, m, currentGen(name), cfg.Resolver(), channelEnabled(cfg.Overrides().EnabledChannels, name))
+	return err
+}
+
+// suppressLock returns the per-server mutex used to serialize
+// browser-suppressed OAuth flows, creating it on first use.
+func suppressLock(name string) *sync.Mutex {
+	mu, ok := suppressMus.Get(name)
+	if !ok {
+		mu = &sync.Mutex{}
+		suppressMus.Set(name, mu)
+	}
+	return mu
 }
 
 // initClient initializes a single MCP client with the given configuration.
@@ -534,9 +624,13 @@ func goInitClient(ctx context.Context, cfg *config.ConfigStore, name string, m c
 				slog.Error("Panic in MCP client initialization", "error", err, "name", name)
 			}
 		}()
-		if err := initClient(ctx, cfg, name, m, gen, cfg.Resolver()); err != nil {
-			slog.Debug("Failed to initialize MCP client", "name", name, "error", err)
-		}
+		start := time.Now()
+		err := initClient(ctx, cfg, name, m, gen, cfg.Resolver())
+		slog.Debug("MCP client initialization finished",
+			"name", name,
+			"duration", time.Since(start).Truncate(time.Millisecond).String(),
+			"error", err,
+		)
 	}()
 }
 
@@ -786,6 +880,15 @@ func createSession(ctx context.Context, cfg *config.ConfigStore, name string, m 
 		cancel()
 		cancelTimer.Stop()
 		return nil, err
+	}
+
+	// If the caller requested a browser-suppressed flow (server-driven
+	// remote auth), suppress the handler's local browser open; the caller
+	// surfaces MCPAuthURL(name) to the user on their own machine.
+	if oauthHandler != nil {
+		if suppress, _ := ctx.Value(suppressBrowserKey{}).(bool); suppress {
+			oauthHandler.SetBrowserSuppress(true)
+		}
 	}
 
 	// Wrap the transport so channel notifications can be intercepted. The
@@ -1116,9 +1219,9 @@ func mcpTimeout(m config.MCPConfig) time.Duration {
 	// OAuth flows require user interaction in a browser, so use a
 	// generous default to avoid timing out mid-auth.
 	if m.OAuth {
-		return 5 * time.Minute
+		return 30 * time.Second
 	}
-	return 15 * time.Second
+	return 10 * time.Second
 }
 
 // hasUsableToken returns true if the saved OAuth token has an access

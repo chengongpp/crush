@@ -199,7 +199,7 @@ type MCPConfig struct {
 	Disabled      bool              `json:"disabled,omitempty" jsonschema:"description=Whether this MCP server is disabled,default=false"`
 	DisabledTools []string          `json:"disabled_tools,omitempty" jsonschema:"description=List of tools from this MCP server to disable,example=get-library-doc"`
 	EnabledTools  []string          `json:"enabled_tools,omitempty" jsonschema:"description=Allow list of tools from this MCP server,example=get-library-doc"`
-	Timeout       int               `json:"timeout,omitempty" jsonschema:"description=Timeout in seconds for MCP server connections,default=15,example=30,example=60,example=120"`
+	Timeout       int               `json:"timeout,omitempty" jsonschema:"description=Timeout in seconds for MCP server connections,default=10,example=30,example=60,example=120"`
 
 	// Headers are HTTP headers for HTTP/SSE MCP servers. Values run
 	// through shell expansion at MCP startup, so $VAR and $(cmd)
@@ -757,6 +757,21 @@ func (c *Config) GetModel(provider, model string) *catwalk.Model {
 		}
 	}
 	return nil
+}
+
+// IsModelAvailable returns true if the provider is enabled and the model
+// exists in its catalog. Unlike GetModel, it rejects disabled providers.
+func (c *Config) IsModelAvailable(provider, model string) bool {
+	providerConfig, ok := c.Providers.Get(provider)
+	if !ok || providerConfig.Disable {
+		return false
+	}
+	for _, m := range providerConfig.Models {
+		if m.ID == model {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Config) GetProviderForModel(modelType SelectedModelType) *ProviderConfig {
