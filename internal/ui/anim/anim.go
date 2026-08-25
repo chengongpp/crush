@@ -19,25 +19,30 @@ import (
 )
 
 const (
-	fps           = 20
+	// Frames per second. Every step triggers a full TUI repaint, so this
+	// value directly controls how much output is pushed to the terminal
+	// while the spinner is visible. Keep it low: 5 (200ms per frame) is
+	// enough for a lively scramble without flooding slow terminals or
+	// remote sessions.
+	fps           = 5
 	initialChar   = '.'
 	labelGap      = " "
 	labelGapWidth = 1
 
 	// Periods of ellipsis animation speed in steps.
 	//
-	// If the FPS is 20 (50 milliseconds) this means that the ellipsis will
-	// change every 8 frames (400 milliseconds).
-	ellipsisAnimSpeed = 8
+	// If the FPS is 5 (200 milliseconds) this means that the ellipsis will
+	// change every 2 frames (400 milliseconds).
+	ellipsisAnimSpeed = 2
 
 	// The maximum number of animation steps that can pass before a
-	// character appears. With fps == 20 this is ~1s of staggered
+	// character appears. With fps == 5 this is ~1s of staggered
 	// entrance, identical to the previous wall-clock-driven value.
 	// Switching from wall-clock + rand to a step-driven birth schedule
 	// keeps Render() deterministic: two Anim instances built from the
 	// same Settings produce byte-identical output when no Animate ticks
 	// have advanced their step counter.
-	maxBirthSteps = 20
+	maxBirthSteps = 5
 
 	// Number of frames to prerender for the animation. After this number
 	// of frames, the animation will loop. This only applies when color
