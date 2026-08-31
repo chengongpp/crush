@@ -2091,6 +2091,22 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 			return util.NewInfoMsg("Reasoning effort set to " + msg.Effort)
 		}))
 		m.dialog.CloseDialog(dialog.ReasoningID)
+	case dialog.ActionSelectSearchProvider:
+		cfg := m.com.Config()
+		if cfg == nil {
+			cmds = append(cmds, util.ReportError(errors.New("configuration not found")))
+			break
+		}
+		if err := m.com.Workspace.SetConfigField(config.ScopeGlobal, "options.search_provider", msg.Provider); err != nil {
+			cmds = append(cmds, util.ReportError(err))
+			break
+		}
+		label := msg.Provider
+		if l, ok := dialog.SearchProviderLabel(msg.Provider); ok {
+			label = l
+		}
+		cmds = append(cmds, func() tea.Msg { return util.NewInfoMsg("Search provider set to " + label) })
+		m.dialog.CloseDialog(dialog.SearchProviderID)
 	case dialog.ActionPermissionResponse:
 		m.dialog.CloseDialog(dialog.PermissionsID)
 		switch msg.Action {
@@ -4480,6 +4496,10 @@ func (m *UI) openDialog(id string, vision bool) tea.Cmd {
 		if cmd := m.openReasoningDialog(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+	case dialog.SearchProviderID:
+		if cmd := m.openSearchProviderDialog(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	case dialog.NotificationsID:
 		if cmd := m.openNotificationsDialog(); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -4575,6 +4595,22 @@ func (m *UI) openReasoningDialog() tea.Cmd {
 	}
 
 	m.dialog.OpenDialog(reasoningDialog)
+	return nil
+}
+
+// openSearchProviderDialog opens the search provider picker dialog.
+func (m *UI) openSearchProviderDialog() tea.Cmd {
+	if m.dialog.ContainsDialog(dialog.SearchProviderID) {
+		m.dialog.BringToFront(dialog.SearchProviderID)
+		return nil
+	}
+
+	searchProviderDialog, err := dialog.NewSearchProvider(m.com)
+	if err != nil {
+		return util.ReportError(err)
+	}
+
+	m.dialog.OpenDialog(searchProviderDialog)
 	return nil
 }
 

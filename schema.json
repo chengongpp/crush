@@ -586,6 +586,16 @@
           "type": "array",
           "description": "List of skill names to disable and hide from the agent"
         },
+        "search_provider": {
+          "type": "string",
+          "enum": [
+            "duckduckgo",
+            "deepseek",
+            "bing"
+          ],
+          "description": "Search provider for the web_search tool",
+          "default": "duckduckgo"
+        },
         "vision_model": {
           "$ref": "#/$defs/SelectedModel",
           "description": "Vision model that describes images for non-vision models. When set"

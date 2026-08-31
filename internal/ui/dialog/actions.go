@@ -73,6 +73,11 @@ type (
 	ActionSelectReasoningEffort struct {
 		Effort string
 	}
+	// ActionSelectSearchProvider is a message indicating a web search
+	// provider has been selected.
+	ActionSelectSearchProvider struct {
+		Provider string
+	}
 	ActionPermissionResponse struct {
 		Permission permission.PermissionRequest
 		Action     PermissionAction

@@ -334,6 +334,7 @@ type Options struct {
 	Progress                  *bool          `json:"progress,omitempty" jsonschema:"description=Show indeterminate progress updates during long operations,default=true"`
 	Notifications             string         `json:"notifications,omitempty" jsonschema:"description=Notification style to use. Options: auto (default)\\, native\\, osc\\, bell\\, disabled. Auto selects based on environment: native for local sessions\\, osc for SSH (with automatic OSC 99/777 detection).,enum=auto,enum=native,enum=osc,enum=bell,enum=disabled,default=auto"`
 	DisabledSkills            []string       `json:"disabled_skills,omitempty" jsonschema:"description=List of skill names to disable and hide from the agent,example=crush-config"`
+	SearchProvider            string         `json:"search_provider,omitempty" jsonschema:"description=Search provider for the web_search tool,enum=duckduckgo,enum=deepseek,enum=bing,default=duckduckgo"`
 	VisionModel               *SelectedModel `json:"vision_model,omitempty" jsonschema:"description=Vision model that describes images for non-vision models. When set, image files are sent to this model and the text description is forwarded to the primary model. Set to null or omit to disable vision delegation."`
 }
 

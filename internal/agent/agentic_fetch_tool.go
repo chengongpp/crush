@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/crush/internal/agent/prompt"
 	"github.com/charmbracelet/crush/internal/agent/tools"
 	"github.com/charmbracelet/crush/internal/permission"
+	"github.com/charmbracelet/crush/internal/search"
 )
 
 //go:embed templates/agentic_fetch.md
@@ -163,7 +164,7 @@ func (c *coordinator) agenticFetchTool(_ context.Context, client *http.Client) (
 			}
 
 			webFetchTool := tools.NewWebFetchTool(tmpDir, client)
-			webSearchTool := tools.NewWebSearchTool(client)
+			webSearchTool := tools.NewWebSearchTool(client, search.FromConfig(c.cfg.Config()))
 			fetchTools := []fantasy.AgentTool{
 				webFetchTool,
 				webSearchTool,
