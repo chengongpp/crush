@@ -206,9 +206,10 @@ var optionSpecs = map[string]optionSpec{
 	"default-providers":    {jsonKey: "disable_default_providers", kind: optBool, inverted: true},
 
 	// String fields.
-	"notifications":  {jsonKey: "notifications", kind: optString},
-	"data-directory": {jsonKey: "data_directory", kind: optString},
-	"initialize-as":  {jsonKey: "initialize_as", kind: optString},
+	"notifications":   {jsonKey: "notifications", kind: optString},
+	"data-directory":  {jsonKey: "data_directory", kind: optString},
+	"initialize-as":   {jsonKey: "initialize_as", kind: optString},
+	"search-provider": {jsonKey: "search_provider", kind: optString},
 
 	// Integer fields, in seconds.
 	"request-timeout": {jsonKey: "request_timeout", kind: optInt},

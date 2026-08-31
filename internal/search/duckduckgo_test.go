@@ -1,4 +1,4 @@
-package tools
+package search
 
 import (
 	"context"
@@ -39,7 +39,11 @@ func loadAnomalyPage(t *testing.T) string {
 // result set.
 func TestSearchRateLimitedOn202(t *testing.T) {
 	serveSearchStub(t, http.StatusAccepted, loadAnomalyPage(t))
-	_, err := searchDuckDuckGo(context.Background(), http.DefaultClient, "anything", 10)
+	provider, err := New(http.DefaultClient, Config{Provider: "duckduckgo"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_, err = provider.Search(context.Background(), "anything", 10)
 	if !errors.Is(err, errSearchRateLimited) {
 		t.Fatalf("expected errSearchRateLimited, got %v", err)
 	}
@@ -50,7 +54,11 @@ func TestSearchRateLimitedOn202(t *testing.T) {
 // with HTTP 200 once a client is flagged.
 func TestSearchRateLimitedOnAnomalyPage(t *testing.T) {
 	serveSearchStub(t, http.StatusOK, loadAnomalyPage(t))
-	_, err := searchDuckDuckGo(context.Background(), http.DefaultClient, "anything", 10)
+	provider, err := New(http.DefaultClient, Config{Provider: "duckduckgo"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_, err = provider.Search(context.Background(), "anything", 10)
 	if !errors.Is(err, errSearchRateLimited) {
 		t.Fatalf("expected errSearchRateLimited, got %v", err)
 	}
@@ -64,7 +72,11 @@ func TestSearchParsesNormalResults(t *testing.T) {
 <tr><td class="result-snippet">A snippet about the example post.</td></tr>
 </table></body></html>`
 	serveSearchStub(t, http.StatusOK, page)
-	results, err := searchDuckDuckGo(context.Background(), http.DefaultClient, "example", 10)
+	provider, err := New(http.DefaultClient, Config{Provider: "duckduckgo"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	results, err := provider.Search(context.Background(), "example", 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

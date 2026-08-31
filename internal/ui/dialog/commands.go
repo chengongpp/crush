@@ -451,6 +451,7 @@ func (c *Commands) defaultCommands() []*CommandItem {
 		NewCommandItem(c.com.Styles, "new_session", "New Session", "ctrl+n", ActionNewSession{}).WithAliases("clear"),
 		NewCommandItem(c.com.Styles, "switch_session", "Sessions", "ctrl+s", ActionOpenDialog{DialogID: SessionsID}),
 		NewCommandItem(c.com.Styles, "switch_model", "Switch Model", "ctrl+l", ActionOpenDialog{DialogID: ModelsID}),
+		NewCommandItem(c.com.Styles, "switch_search_provider", "Search Provider", "", ActionOpenDialog{DialogID: SearchProviderID}),
 	}
 
 	// Vision model picker. A separate "disable" entry appears only when a

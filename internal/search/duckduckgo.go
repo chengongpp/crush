@@ -1,4 +1,4 @@
-package tools
+package search
 
 import (
 	"context"
@@ -10,69 +10,36 @@ import (
 	"net/url"
 	"slices"
 	"strings"
-	"sync"
-	"time"
 
 	"golang.org/x/net/html"
 )
 
-// SearchResult represents a single search result from DuckDuckGo.
-type SearchResult struct {
-	Title    string
-	Link     string
-	Snippet  string
-	Position int
+func init() {
+	Register(DefaultProvider, NewDuckDuckGo)
 }
 
-var userAgents = []string{
-	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
-	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
-	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0",
-	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:133.0) Gecko/20100101 Firefox/133.0",
-	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15",
-	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15",
-	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
+// DuckDuckGo searches the DuckDuckGo Lite endpoint and parses the HTML
+// result table.
+type DuckDuckGo struct {
+	client   *http.Client
+	endpoint string
 }
 
-var acceptLanguages = []string{
-	"en-US,en;q=0.9",
-	"en-US,en;q=0.9,es;q=0.8",
-	"en-GB,en;q=0.9,en-US;q=0.8",
-	"en-US,en;q=0.5",
-	"en-CA,en;q=0.9,en-US;q=0.8",
+// NewDuckDuckGo builds the DuckDuckGo provider.
+func NewDuckDuckGo(client *http.Client, _ Config) (Provider, error) {
+	return &DuckDuckGo{client: client, endpoint: ddgLiteEndpoint}, nil
 }
 
-// errSearchRateLimited reports that DuckDuckGo served a bot-check page
-// instead of results.
-var errSearchRateLimited = errors.New(
-	"DuckDuckGo is rate-limiting this machine. " +
-		"Do not retry or rephrase; wait a few minutes or fetch known URLs directly",
-)
+// Name returns the provider identifier.
+func (p *DuckDuckGo) Name() string { return DefaultProvider }
 
-// ddgAnomalyMarkers are substrings of the bot-detection page DuckDuckGo
-// Lite serves (with HTTP 200) instead of results once a client trips its
-// rate limiter.  Parsing that page yields zero results, which would
-// otherwise masquerade as "your query found nothing".
-var ddgAnomalyMarkers = []string{
-	"anomaly-modal",
-	"/anomaly.js",
-	"Unfortunately, bots use DuckDuckGo too",
-}
-
-// ddgLiteEndpoint is a package var so tests can point the search at a
-// local httptest server.
-var ddgLiteEndpoint = "https://lite.duckduckgo.com/lite/?q="
-
-func searchDuckDuckGo(ctx context.Context, client *http.Client, query string, maxResults int) ([]SearchResult, error) {
+// Search executes the query against DuckDuckGo Lite.
+func (p *DuckDuckGo) Search(ctx context.Context, query string, maxResults int) ([]Result, error) {
 	if maxResults <= 0 {
 		maxResults = 10
 	}
 
-	searchURL := ddgLiteEndpoint + url.QueryEscape(query)
+	searchURL := p.endpoint + url.QueryEscape(query)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
 	if err != nil {
@@ -81,7 +48,7 @@ func searchDuckDuckGo(ctx context.Context, client *http.Client, query string, ma
 
 	setRandomizedHeaders(req)
 
-	resp, err := client.Do(req)
+	resp, err := p.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute search: %w", err)
 	}
@@ -112,6 +79,49 @@ func searchDuckDuckGo(ctx context.Context, client *http.Client, query string, ma
 	return parseLiteSearchResults(content, maxResults)
 }
 
+// errSearchRateLimited reports that DuckDuckGo served a bot-check page
+// instead of results.
+var errSearchRateLimited = errors.New(
+	"DuckDuckGo is rate-limiting this machine. " +
+		"Do not retry or rephrase; wait a few minutes or fetch known URLs directly",
+)
+
+// ddgAnomalyMarkers are substrings of the bot-detection page DuckDuckGo
+// Lite serves (with HTTP 200) instead of results once a client trips its
+// rate limiter. Parsing that page yields zero results, which would
+// otherwise masquerade as "your query found nothing".
+var ddgAnomalyMarkers = []string{
+	"anomaly-modal",
+	"/anomaly.js",
+	"Unfortunately, bots use DuckDuckGo too",
+}
+
+// ddgLiteEndpoint is a package var so tests can point the search at a
+// local httptest server.
+var ddgLiteEndpoint = "https://lite.duckduckgo.com/lite/?q="
+
+var userAgents = []string{
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:133.0) Gecko/20100101 Firefox/133.0",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
+}
+
+var acceptLanguages = []string{
+	"en-US,en;q=0.9",
+	"en-US,en;q=0.9,es;q=0.8",
+	"en-GB,en;q=0.9,en-US;q=0.8",
+	"en-US,en;q=0.5",
+	"en-CA,en;q=0.9,en-US;q=0.8",
+}
+
 func setRandomizedHeaders(req *http.Request) {
 	req.Header.Set("User-Agent", userAgents[rand.IntN(len(userAgents))])
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
@@ -129,14 +139,14 @@ func setRandomizedHeaders(req *http.Request) {
 	}
 }
 
-func parseLiteSearchResults(htmlContent string, maxResults int) ([]SearchResult, error) {
+func parseLiteSearchResults(htmlContent string, maxResults int) ([]Result, error) {
 	doc, err := html.Parse(strings.NewReader(htmlContent))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse HTML: %w", err)
 	}
 
-	var results []SearchResult
-	var currentResult *SearchResult
+	var results []Result
+	var currentResult *Result
 
 	var traverse func(*html.Node)
 	traverse = func(n *html.Node) {
@@ -149,7 +159,7 @@ func parseLiteSearchResults(htmlContent string, maxResults int) ([]SearchResult,
 						return
 					}
 				}
-				currentResult = &SearchResult{Title: getTextContent(n)}
+				currentResult = &Result{Title: getTextContent(n)}
 				for _, attr := range n.Attr {
 					if attr.Key == "href" {
 						currentResult.Link = cleanDuckDuckGoURL(attr.Val)
@@ -218,37 +228,4 @@ func cleanDuckDuckGoURL(rawURL string) string {
 		}
 	}
 	return rawURL
-}
-
-func formatSearchResults(results []SearchResult) string {
-	if len(results) == 0 {
-		return "No results found. Try rephrasing your search."
-	}
-
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "Found %d search results:\n\n", len(results))
-	for _, result := range results {
-		fmt.Fprintf(&sb, "%d. %s\n", result.Position, result.Title)
-		fmt.Fprintf(&sb, "   URL: %s\n", result.Link)
-		fmt.Fprintf(&sb, "   Summary: %s\n\n", result.Snippet)
-	}
-	return sb.String()
-}
-
-var (
-	lastSearchMu   sync.Mutex
-	lastSearchTime time.Time
-)
-
-// maybeDelaySearch adds a random delay if the last search was recent.
-func maybeDelaySearch() {
-	lastSearchMu.Lock()
-	defer lastSearchMu.Unlock()
-
-	minGap := time.Duration(500+rand.IntN(1500)) * time.Millisecond
-	elapsed := time.Since(lastSearchTime)
-	if elapsed < minGap {
-		time.Sleep(minGap - elapsed)
-	}
-	lastSearchTime = time.Now()
 }

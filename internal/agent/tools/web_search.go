@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+
+	"github.com/charmbracelet/crush/internal/search"
 )
 
 //go:embed web_search.md.tpl
@@ -20,7 +22,7 @@ var webSearchDescriptionTpl = template.Must(
 )
 
 // NewWebSearchTool creates a web search tool for sub-agents (no permissions needed).
-func NewWebSearchTool(client *http.Client) fantasy.AgentTool {
+func NewWebSearchTool(client *http.Client, cfg search.Config) fantasy.AgentTool {
 	if client == nil {
 		transport := http.DefaultTransport.(*http.Transport).Clone()
 		transport.MaxIdleConns = 100
@@ -49,14 +51,19 @@ func NewWebSearchTool(client *http.Client) fantasy.AgentTool {
 				maxResults = 20
 			}
 
-			maybeDelaySearch()
-			results, err := searchDuckDuckGo(ctx, client, params.Query, maxResults)
-			slog.Debug("Web search completed", "query", params.Query, "results", len(results), "err", err)
+			provider, err := search.New(client, cfg)
+			if err != nil {
+				return fantasy.NewTextErrorResponse("Failed to initialize search provider: " + err.Error()), nil
+			}
+
+			search.MaybeDelaySearch()
+			results, err := provider.Search(ctx, params.Query, maxResults)
+			slog.Debug("Web search completed", "query", params.Query, "provider", provider.Name(), "results", len(results), "err", err)
 			if err != nil {
 				return fantasy.NewTextErrorResponse("Failed to search: " + err.Error()), nil
 			}
 
-			return fantasy.NewTextResponse(formatSearchResults(results)), nil
+			return fantasy.NewTextResponse(search.FormatResults(results)), nil
 		},
 	)
 }
