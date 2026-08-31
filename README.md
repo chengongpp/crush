@@ -275,10 +275,10 @@ if [[ $HOSTNAME == "babysquid" ]]; then
     source ~/my-stuff/babysquid.sh
 fi
 
-# Add an MCP server, with a GitHub API token stored in 1password.
+# Add an MCP server, with a GitHub API token stored in 1Password.
 mcp add github \
   --type http \
-  --url "https://api.githubcopilot.com/mcp/" \
+  --url "https://api.github.com/mcp/" \
   --header Authorization "Bearer $(op read 'op://my-secret-key')"
 ```
 
@@ -299,7 +299,7 @@ does not execute a `crushrc` from them.)
 [xdg]: https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
 
 What about the old JSON format? It’s still supported, but it should be
-consdiered deprecated. See: [the config docs](./docs/config/) for details.
+considered deprecated. See: [the config docs](./docs/config/) for details.
 
 > [!TIP]
 > You can override the user and data config locations by setting:
@@ -373,7 +373,7 @@ mcp add filesystem --command node --args /path/to/mcp-server.js \
   --timeout 10 --disabled-tools some-tool-name --env NODE_ENV production
 
 # Add a GitHub MCP server that uses an API token.
-mcp add github --type http --url "https://api.githubcopilot.com/mcp/" \
+mcp add github --type http --url https://api.github.com/mcp/ \
   --timeout 10 --header Authorization "Bearer $GH_PAT" \
   --disabled-tools create_issue --disabled-tools create_pull_request
 
@@ -411,7 +411,7 @@ credentials directly. All values support shell expansion:
   "mcp": {
     "github": {
       "type": "http",
-      "url": "https://api.githubcopilot.com/mcp/",
+      "url": "https://api.github.com/mcp/",
       "oauth": true,
       "oauth_client_id": "Iv1.abc123def456",
       "oauth_client_secret": "$GITHUB_MCP_SECRET",
@@ -426,50 +426,19 @@ and authenticates as the specified client. When omitted, Crush attempts
 dynamic registration automatically (works with Linear, Notion, and other
 servers that support RFC 7591).
 
-### Bots
+#### Sessionless servers
 
-#### WeCom
+Some HTTP MCP servers are sessionless — they never issue a
+`Mcp-Session-Id` and reject the `subscriptions/listen` stream Crush opens
+for list-changed notifications, which would otherwise break the
+connection. Crush auto-detects known sessionless servers (GitHub MCP,
+`api.githubcopilot.com/mcp`), so those need no extra configuration.
 
-Crush can also run as a **WeCom bot bridge** over the official bot WebSocket
-long connection.
-
-```json
-{
-  "$schema": "https://charm.land/crush.json",
-  "bots": {
-    "wecom": {
-      "enabled": true,
-      "bot_id": "YOUR_WECOM_BOT_ID",
-      "secret": "YOUR_WECOM_BOT_SECRET",
-      "thinking_message": "思考中...",
-      "auto_approve_permissions": true
-    }
-  }
-}
-```
-
-Start it with:
-
-```bash
-crush bot wecom
-```
-
-You can also override credentials from the command line:
-
-```bash
-crush bot wecom --bot-id "$WECOM_BOT_ID" --secret "$WECOM_BOT_SECRET"
-```
-
-The first version focuses on a reliable text bridge:
-
-- inbound support: text, mixed text, and voice transcript messages
-- outbound support: a temporary "thinking" message followed by the final text reply
-- conversation routing: one persistent Crush session per WeCom chat
-
-> [!IMPORTANT]
-> `crush bot wecom` runs unattended. Use `--yolo` or set
-> `bots.wecom.auto_approve_permissions=true`, otherwise tool permission prompts can
-> block replies.
+For other sessionless servers, mark them explicitly with
+`"sessionless": true` (or `--sessionless true` in `crushrc`); set it to
+`false` to force the default behavior for an auto-detected URL. The
+tradeoff is that a sessionless server won't push live
+tool/prompt/resource list-changed notifications.
 
 ### Hooks
 
@@ -918,6 +887,12 @@ providers and models from [Catwalk](https://github.com/charmbracelet/catwalk),
 the open source Crush provider database. This means that when new providers and
 models are available, or when model metadata changes, Crush automatically
 updates your local configuration.
+
+### Custom provider catalog
+
+You can also override [Catwalk](https://github.com/charmbracelet/catwalk) default URL (for testing, using a fork).
+
+You can do so by setting `CATWALK_URL` enviromental variable. (e.g. `export CATWALK_URL=http://localhost:8000`)
 
 ### Disabling automatic provider updates
 

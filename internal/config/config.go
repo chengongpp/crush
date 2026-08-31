@@ -201,6 +201,19 @@ type MCPConfig struct {
 	EnabledTools  []string          `json:"enabled_tools,omitempty" jsonschema:"description=Allow list of tools from this MCP server,example=get-library-doc"`
 	Timeout       int               `json:"timeout,omitempty" jsonschema:"description=Timeout in seconds for MCP server connections,default=10,example=30,example=60,example=120"`
 
+	// Sessionless marks a server that does not maintain an MCP session (it
+	// never issues a Mcp-Session-Id). When true, Crush omits the
+	// tools/prompts/resources list-changed handlers: the go-sdk opens a
+	// SEP-2575 "subscriptions/listen" stream whenever any of those handlers
+	// is set, and sessionless streamable-HTTP servers (e.g. GitHub MCP)
+	// answer that POST with 404 ("session not found"), which the SDK treats
+	// as fatal. The cost is no live list-changed notifications from this
+	// server.
+	//
+	// When nil, Crush auto-detects a set of known sessionless servers (see
+	// IsSessionless); set it explicitly to override that detection.
+	Sessionless *bool `json:"sessionless,omitempty" jsonschema:"description=Mark a sessionless MCP server (no Mcp-Session-Id) so Crush skips the subscriptions/listen stream it would otherwise reject. Leave unset to auto-detect known sessionless servers (e.g. GitHub MCP),default=false"`
+
 	// Headers are HTTP headers for HTTP/SSE MCP servers. Values run
 	// through shell expansion at MCP startup, so $VAR and $(cmd)
 	// work. A header whose value resolves to the empty string (unset
@@ -265,6 +278,14 @@ type TUIOptions struct {
 	Completions Completions `json:"completions,omitzero" jsonschema:"description=Completions UI options"`
 	Transparent *bool       `json:"transparent,omitempty" jsonschema:"description=Enable transparent background for the TUI interface,default=false"`
 	Scrollbar   string      `json:"scrollbar,omitempty" jsonschema:"description=Chat scrollbar visibility,enum=default,enum=always,enum=never,default=default"`
+	ExitBanner  ExitBanner  `json:"exit_banner,omitempty" jsonschema:"description=Exit banner style after quitting Crush,enum=default,enum=compact,enum=none,default=default"`
+}
+
+// IsTransparent reports whether the TUI draws a transparent background. The
+// nil receiver and the unset pointer both mean opaque, so callers can ask
+// without unwrapping either.
+func (t *TUIOptions) IsTransparent() bool {
+	return t != nil && t.Transparent != nil && *t.Transparent
 }
 
 // Completions defines options for the completions UI.
@@ -273,15 +294,38 @@ type Completions struct {
 	MaxItems *int `json:"max_items,omitempty" jsonschema:"description=Maximum number of items to return for the ls tool,default=1000,example=100"`
 }
 
+// Limits returns the configured completion limits. Zero means the user has not
+// pinned that limit, and callers fall back to their own built-in cap.
 func (c Completions) Limits() (depth, items int) {
 	return ptrValOr(c.MaxDepth, 0), ptrValOr(c.MaxItems, 0)
 }
+
+// Diff mode options.
+const (
+	DiffModeUnified = "unified" // Inline unified diffs
+	DiffModeSplit   = "split"   // Side-by-side diffs
+)
 
 // Scrollbar visibility options.
 const (
 	ScrollbarDefault = "default" // Auto-hide after 2 seconds
 	ScrollbarAlways  = "always"  // Always show when content exceeds viewport
 	ScrollbarNever   = "never"   // Never show scrollbar
+)
+
+// ExitBanner selects what Crush prints after the TUI exits.
+type ExitBanner string
+
+const (
+	// ExitBannerDefault renders the full ASCII art logo with padding. It is
+	// also what the zero value and any unrecognized value fall back to.
+	ExitBannerDefault ExitBanner = "default"
+	// ExitBannerCompact renders only the session and resume lines, with no
+	// logo and no padding. With no active session it renders nothing at all,
+	// so Crush exits silently.
+	ExitBannerCompact ExitBanner = "compact"
+	// ExitBannerNone renders nothing.
+	ExitBannerNone ExitBanner = "none"
 )
 
 type Permissions struct {
@@ -440,6 +484,33 @@ func (m MCPConfig) ResolvedURL(r VariableResolver) (string, error) {
 		return "", fmt.Errorf("url: %w", err)
 	}
 	return v, nil
+}
+
+// knownSessionlessMCPs is the set of MCP endpoint URLs (normalized, no
+// trailing slash) that are known not to maintain an MCP session — they
+// never issue a Mcp-Session-Id and reject the SEP-2575
+// "subscriptions/listen" stream. Add an entry when a server is confirmed to
+// behave this way.
+var knownSessionlessMCPs = map[string]struct{}{
+	"https://api.github.com/mcp":        {},
+	"https://api.githubcopilot.com/mcp": {},
+}
+
+// IsSessionless reports whether the server should be treated as sessionless.
+// An explicit Sessionless value wins; when unset, the resolved URL is matched
+// against knownSessionlessMCPs (trailing slash ignored). The URL is resolved
+// through r so $VAR-expanded endpoints are detected too; on a resolution
+// error the explicit value (or false) is used.
+func (m MCPConfig) IsSessionless(r VariableResolver) bool {
+	if m.Sessionless != nil {
+		return *m.Sessionless
+	}
+	url, err := m.ResolvedURL(r)
+	if err != nil {
+		return false
+	}
+	_, ok := knownSessionlessMCPs[strings.TrimSuffix(url, "/")]
+	return ok
 }
 
 // ResolvedHeaders returns m.Headers with every value expanded through
@@ -638,27 +709,6 @@ func (h *HookConfig) TimeoutDuration() time.Duration {
 	return time.Duration(h.Timeout) * time.Second
 }
 
-type WeComConfig struct {
-	Enabled bool `json:"enabled,omitempty" jsonschema:"description=Enable the WeCom bot bridge configuration,default=false"`
-
-	BotID  string `json:"bot_id,omitempty" jsonschema:"description=WeCom bot ID used for WebSocket authentication"`
-	Secret string `json:"secret,omitempty" jsonschema:"description=WeCom bot secret used for WebSocket authentication"`
-
-	WebSocketURL string `json:"websocket_url,omitempty" jsonschema:"description=WeCom bot WebSocket endpoint,format=uri,example=wss://openws.work.weixin.qq.com"`
-
-	HeartbeatIntervalSeconds int `json:"heartbeat_interval_seconds,omitempty" jsonschema:"description=Heartbeat interval in seconds for the WeCom WebSocket connection,default=30"`
-	ReconnectIntervalSeconds int `json:"reconnect_interval_seconds,omitempty" jsonschema:"description=Base reconnect delay in seconds for the WeCom WebSocket connection,default=1"`
-	MaxReconnectAttempts     int `json:"max_reconnect_attempts,omitempty" jsonschema:"description=Maximum reconnect attempts after network disconnects,default=10"`
-	MaxAuthFailureAttempts   int `json:"max_auth_failure_attempts,omitempty" jsonschema:"description=Maximum reconnect attempts after authentication failures,default=5"`
-
-	ThinkingMessage        string `json:"thinking_message,omitempty" jsonschema:"description=Temporary message sent to WeCom while Crush is generating a reply,default=思考中..."`
-	AutoApprovePermissions bool   `json:"auto_approve_permissions,omitempty" jsonschema:"description=Automatically approve Crush tool permission prompts when running the WeCom bot command,default=false"`
-}
-
-type BotsConfig struct {
-	WeCom *WeComConfig `json:"wecom,omitempty" jsonschema:"description=WeCom bot bridge configuration"`
-}
-
 // Config holds the configuration for crush.
 type Config struct {
 	Schema string `json:"$schema,omitempty"`
@@ -683,11 +733,6 @@ type Config struct {
 	Tools Tools `json:"tools,omitzero" jsonschema:"description=Tool configurations"`
 
 	Hooks map[string][]HookConfig `json:"hooks,omitempty" jsonschema:"description=User-defined shell commands that fire on hook events (e.g. PreToolUse)"`
-
-	Bots *BotsConfig `json:"bots,omitempty" jsonschema:"description=Bot bridge configurations"`
-
-	// Deprecated: use bots.wecom instead.
-	WeCom *WeComConfig `json:"wecom,omitempty" jsonschema:"-"`
 
 	// Env is a map of environment variables set on startup.
 	Env map[string]string `json:"env,omitempty" jsonschema:"description=Environment variables to set on startup"`
