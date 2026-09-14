@@ -146,6 +146,12 @@ type ProviderConfig struct {
 
 	// The provider models
 	Models []catwalk.Model `json:"models,omitempty" jsonschema:"description=List of models available from this provider"`
+
+	// ChatGPTModels lists the models the ChatGPT (Codex) backend grants
+	// when the provider is authenticated with a ChatGPT account. It is
+	// the provider's whole catalog in that case: the API-key models in
+	// Models are not served by the subscription.
+	ChatGPTModels []catwalk.Model `json:"chatgpt_models,omitempty" jsonschema:"-"`
 }
 
 // ToProvider converts the [ProviderConfig] to a [catwalk.Provider].
@@ -180,6 +186,17 @@ func (c *ProviderConfig) ToProvider() catwalk.Provider {
 
 func (c *ProviderConfig) SetupGitHubCopilot() {
 	maps.Copy(c.ExtraHeaders, copilot.Headers())
+}
+
+// HasAPIKey reports whether the provider's api_key resolves to a usable
+// credential. The stored value is often an unresolved template like
+// $OPENAI_API_KEY, which is not a credential until the variable exists.
+func (c *ProviderConfig) HasAPIKey(resolver VariableResolver) bool {
+	if c.APIKey == "" {
+		return false
+	}
+	v, err := resolver.ResolveValue(c.APIKey)
+	return err == nil && v != ""
 }
 
 type MCPType string
@@ -278,6 +295,7 @@ type TUIOptions struct {
 	Completions Completions `json:"completions,omitzero" jsonschema:"description=Completions UI options"`
 	Transparent *bool       `json:"transparent,omitempty" jsonschema:"description=Enable transparent background for the TUI interface,default=false"`
 	Scrollbar   string      `json:"scrollbar,omitempty" jsonschema:"description=Chat scrollbar visibility,enum=default,enum=always,enum=never,default=default"`
+	Mouse       *bool       `json:"mouse,omitempty" jsonschema:"description=Enable terminal mouse capture for selection\\, clicks\\, and scrolling in the TUI. Disable to let the terminal emulator or tmux handle text selection and copy/paste,default=true"`
 	ExitBanner  ExitBanner  `json:"exit_banner,omitempty" jsonschema:"description=Exit banner style after quitting Crush,enum=default,enum=compact,enum=none,default=default"`
 }
 
@@ -824,8 +842,33 @@ func (c *Config) GetModel(provider, model string) *catwalk.Model {
 				return &m
 			}
 		}
+		for _, m := range providerConfig.ChatGPTModels {
+			if m.ID == model {
+				return &m
+			}
+		}
 	}
 	return nil
+}
+
+// ValidateReasoningEffort checks that effort is a reasoning level the
+// given provider/model supports. It returns an error listing the accepted
+// levels when the model cannot use it.
+func (c *Config) ValidateReasoningEffort(provider, modelID, effort string) error {
+	model := c.GetModel(provider, modelID)
+	if model == nil {
+		return fmt.Errorf("model %q not found for provider %q", modelID, provider)
+	}
+	if len(model.ReasoningLevels) == 0 {
+		return fmt.Errorf("model %q does not support reasoning effort", modelID)
+	}
+	if slices.Contains(model.ReasoningLevels, effort) {
+		return nil
+	}
+	return fmt.Errorf(
+		"model %q does not support reasoning effort %q, accepted values: %s",
+		modelID, effort, strings.Join(model.ReasoningLevels, ", "),
+	)
 }
 
 // IsModelAvailable returns true if the provider is enabled and the model
