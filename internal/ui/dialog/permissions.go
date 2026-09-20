@@ -555,7 +555,7 @@ func (p *Permissions) renderContent(width int) string {
 		return p.renderFetchContent(width)
 	case tools.AgenticFetchToolName:
 		return p.renderAgenticFetchContent(width)
-	case tools.ViewToolName:
+	case tools.ViewToolName, tools.ReadToolName:
 		return p.renderViewContent(width)
 	case tools.LSToolName:
 		return p.renderLSContent(width)
