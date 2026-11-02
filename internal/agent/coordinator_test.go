@@ -7,13 +7,14 @@ import (
 	"net/http"
 	"testing"
 
-	"charm.land/catwalk/pkg/catwalk"
+	"charm.land/catwalk/v3/pkg/catwalk"
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/anthropic"
 	"charm.land/fantasy/providers/bedrock"
 	"charm.land/fantasy/providers/openaicompat"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/discover"
+	"github.com/charmbracelet/crush/internal/message"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -34,7 +35,6 @@ func (m *mockSessionAgent) BeginAccepted(sessionID string) *AcceptedRun {
 }
 
 func (m *mockSessionAgent) Model() Model                        { return m.model }
-func (m *mockSessionAgent) SetModels(large, small Model)        {}
 func (m *mockSessionAgent) SetTools(tools []fantasy.AgentTool)  {}
 func (m *mockSessionAgent) SetSystemPrompt(systemPrompt string) {}
 func (m *mockSessionAgent) Cancel(sessionID string) {
@@ -46,14 +46,18 @@ func (m *mockSessionAgent) IsBusy() bool                                { return
 func (m *mockSessionAgent) QueuedPrompts(sessionID string) int          { return 0 }
 func (m *mockSessionAgent) QueuedPromptsList(sessionID string) []string { return nil }
 func (m *mockSessionAgent) ClearQueue(sessionID string)                 {}
+func (m *mockSessionAgent) AddNote(sessionID, text string)              {}
 func (m *mockSessionAgent) Summarize(context.Context, string, fantasy.ProviderOptions, func(context.Context, *fantasy.ProviderError) error) error {
 	return nil
 }
 func (m *mockSessionAgent) GenerateTitle(context.Context, string, string) {}
+func (m *mockSessionAgent) ListSettledMessages(context.Context, string) ([]message.Message, error) {
+	return nil, nil
+}
 
 // newTestCoordinator creates a minimal coordinator for unit testing runSubAgent.
 func newTestCoordinator(t *testing.T, env fakeEnv, providerID string, providerCfg config.ProviderConfig) *coordinator {
-	cfg, err := config.Init(env.workingDir, "", false)
+	cfg, err := config.Init(t.Context(), env.workingDir, "", false)
 	require.NoError(t, err)
 	cfg.Config().Providers.Set(providerID, providerCfg)
 	return &coordinator{
@@ -87,15 +91,6 @@ func agentResultWithText(text string) *fantasy.AgentResult {
 			},
 		},
 	}
-}
-
-func TestCopilotResponsesModels(t *testing.T) {
-	t.Parallel()
-
-	for _, modelID := range []string{"gpt-6-astra", "grok-4.5", "grok-4.6"} {
-		assert.True(t, copilotResponsesModels[modelID], modelID)
-	}
-	assert.False(t, copilotResponsesModels["gpt-4.1"])
 }
 
 func TestRunSubAgent(t *testing.T) {
@@ -394,7 +389,7 @@ func TestRunSubAgent(t *testing.T) {
 func TestUpdateParentSessionCost(t *testing.T) {
 	t.Run("accumulates cost correctly", func(t *testing.T) {
 		env := testEnv(t)
-		cfg, err := config.Init(env.workingDir, "", false)
+		cfg, err := config.Init(t.Context(), env.workingDir, "", false)
 		require.NoError(t, err)
 		coord := &coordinator{cfg: cfg, sessions: env.sessions}
 
@@ -419,7 +414,7 @@ func TestUpdateParentSessionCost(t *testing.T) {
 
 	t.Run("accumulates multiple child costs", func(t *testing.T) {
 		env := testEnv(t)
-		cfg, err := config.Init(env.workingDir, "", false)
+		cfg, err := config.Init(t.Context(), env.workingDir, "", false)
 		require.NoError(t, err)
 		coord := &coordinator{cfg: cfg, sessions: env.sessions}
 
@@ -450,7 +445,7 @@ func TestUpdateParentSessionCost(t *testing.T) {
 
 	t.Run("child session not found", func(t *testing.T) {
 		env := testEnv(t)
-		cfg, err := config.Init(env.workingDir, "", false)
+		cfg, err := config.Init(t.Context(), env.workingDir, "", false)
 		require.NoError(t, err)
 		coord := &coordinator{cfg: cfg, sessions: env.sessions}
 
@@ -464,7 +459,7 @@ func TestUpdateParentSessionCost(t *testing.T) {
 
 	t.Run("parent session not found", func(t *testing.T) {
 		env := testEnv(t)
-		cfg, err := config.Init(env.workingDir, "", false)
+		cfg, err := config.Init(t.Context(), env.workingDir, "", false)
 		require.NoError(t, err)
 		coord := &coordinator{cfg: cfg, sessions: env.sessions}
 
@@ -480,7 +475,7 @@ func TestUpdateParentSessionCost(t *testing.T) {
 
 	t.Run("zero cost handled correctly", func(t *testing.T) {
 		env := testEnv(t)
-		cfg, err := config.Init(env.workingDir, "", false)
+		cfg, err := config.Init(t.Context(), env.workingDir, "", false)
 		require.NoError(t, err)
 		coord := &coordinator{cfg: cfg, sessions: env.sessions}
 
@@ -512,9 +507,11 @@ func TestGetProviderOptionsReasoningEffort(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			model := Model{
 				CatwalkCfg: catwalk.Model{
-					ID:              "claude-opus-4-7",
-					CanReason:       true,
-					ReasoningLevels: []string{"max"},
+					ID: "claude-opus-4-7",
+					Reasoning: catwalk.Reasoning{
+						Thinking:     catwalk.ThinkingToggleable,
+						EffortLevels: catwalk.NewEffortLevels("max"),
+					},
 				},
 				ModelCfg: config.SelectedModel{
 					Provider:        "test",
@@ -569,9 +566,11 @@ func TestGetProviderOptionsReasoningEffortCustomProvider(t *testing.T) {
 		t.Run(providerType, func(t *testing.T) {
 			model := Model{
 				CatwalkCfg: catwalk.Model{
-					ID:              "qwen/qwen3-8b",
-					CanReason:       true,
-					ReasoningLevels: []string{"low", "medium", "high"},
+					ID: "qwen/qwen3-8b",
+					Reasoning: catwalk.Reasoning{
+						Thinking:     catwalk.ThinkingToggleable,
+						EffortLevels: catwalk.NewEffortLevels("low", "medium", "high"),
+					},
 				},
 				ModelCfg: config.SelectedModel{
 					Provider:        "local",
@@ -596,9 +595,11 @@ func TestGetProviderOptionsReasoningEffortCustomProvider(t *testing.T) {
 func TestGetProviderOptionsReasoningEffortFallback(t *testing.T) {
 	model := Model{
 		CatwalkCfg: catwalk.Model{
-			ID:              "glm-5.2",
-			CanReason:       true,
-			ReasoningLevels: []string{"high", "max"},
+			ID: "glm-5.2",
+			Reasoning: catwalk.Reasoning{
+				Thinking:     catwalk.ThinkingToggleable,
+				EffortLevels: catwalk.NewEffortLevels("high", "max"),
+			},
 		},
 		ModelCfg: config.SelectedModel{
 			Provider: "zai",

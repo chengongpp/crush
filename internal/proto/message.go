@@ -7,7 +7,7 @@ import (
 	"slices"
 	"time"
 
-	"charm.land/catwalk/pkg/catwalk"
+	"charm.land/catwalk/v3/pkg/catwalk"
 	"github.com/charmbracelet/crush/internal/message"
 )
 
@@ -422,24 +422,6 @@ func (m *Message) FinishToolCall(toolCallID string) {
 					Input:    c.Input,
 					Type:     c.Type,
 					Finished: true,
-				}
-				return
-			}
-		}
-	}
-}
-
-// AppendToolCallInput appends input to a tool call.
-func (m *Message) AppendToolCallInput(toolCallID string, inputDelta string) {
-	for i, part := range m.Parts {
-		if c, ok := part.(ToolCall); ok {
-			if c.ID == toolCallID {
-				m.Parts[i] = ToolCall{
-					ID:       c.ID,
-					Name:     c.Name,
-					Input:    c.Input + inputDelta,
-					Type:     c.Type,
-					Finished: c.Finished,
 				}
 				return
 			}

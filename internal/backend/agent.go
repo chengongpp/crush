@@ -98,6 +98,9 @@ func (b *Backend) runAgent(ws *Workspace, msg proto.AgentMessage, accept *agent.
 	}
 	ctx = agent.WithRunCompleteMarker(ctx)
 
+	if msg.Channel != "" {
+		ctx = agent.WithChannel(ctx, msg.Channel)
+	}
 	_, err := ws.AgentCoordinator.RunAccepted(ctx, accept, msg.SessionID, msg.Prompt, proto.AttachmentsToMessage(msg.Attachments)...)
 	if err == nil || errors.Is(err, context.Canceled) {
 		return
@@ -244,6 +247,20 @@ func (b *Backend) ClearQueue(workspaceID, sessionID string) error {
 	return nil
 }
 
+// AddNote keeps text for the session's next prompt. It does not start a run.
+func (b *Backend) AddNote(workspaceID, sessionID, text string) error {
+	ws, err := b.GetWorkspace(workspaceID)
+	if err != nil {
+		return err
+	}
+
+	if ws.AgentCoordinator == nil {
+		return ErrAgentNotInitialized
+	}
+	ws.AgentCoordinator.AddNote(sessionID, text)
+	return nil
+}
+
 // QueuedPromptsList returns the list of queued prompt strings for a
 // session.
 func (b *Backend) QueuedPromptsList(workspaceID, sessionID string) ([]string, error) {
@@ -277,10 +294,18 @@ func (b *Backend) RunShellCommand(ctx context.Context, workspaceID string, req p
 		return proto.ShellCommandResponse{}, err
 	}
 
+	// Oversized output spills into the workspace data directory. Tests
+	// build workspaces without a config store; those fall back to the
+	// system temp directory.
+	var dataDir string
+	if ws.Cfg != nil {
+		dataDir = ws.Cfg.Config().Options.DataDirectory
+	}
+
 	var persist shell.PersistFunc
 	if req.SessionID != "" {
 		persist = func(cmd, output string, exitCode int) error {
-			return shell.PersistOutput(ctx, ws.Messages, req.SessionID, cmd, output, exitCode)
+			return shell.PersistOutput(ctx, ws.Messages, req.SessionID, cmd, output, exitCode, dataDir)
 		}
 	}
 

@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/catwalk/pkg/catwalk"
+	"charm.land/catwalk/v3/pkg/catwalk"
 	"github.com/charmbracelet/crush/internal/commands"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/message"
@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/crush/internal/session"
 	"github.com/charmbracelet/crush/internal/skills"
 	"github.com/charmbracelet/crush/internal/ui/common"
+	"github.com/charmbracelet/crush/internal/ui/styles"
 	"github.com/charmbracelet/crush/internal/ui/util"
 )
 
@@ -58,6 +59,7 @@ type (
 	ActionTogglePills             struct{}
 	ActionExternalEditor          struct{}
 	ActionToggleYoloMode          struct{}
+	ActionToggleSysadminMode      struct{}
 	ActionToggleNotifications     struct{}
 	ActionSelectNotificationStyle struct {
 		Style string
@@ -66,7 +68,41 @@ type (
 	ActionToggleMouseSupport          struct{}
 	ActionInitializeProject           struct{}
 	ActionDisableVisionModel          struct{}
-	ActionSummarize                   struct {
+	ActionSwitchTheme                 struct {
+		Theme string
+	}
+	ActionPreviewTheme struct {
+		Theme string
+	}
+	ActionRevertThemePreview  struct{}
+	ActionPreviewThemePalette struct {
+		Base    string
+		Palette styles.Palette
+	}
+	ActionSaveThemePalette struct {
+		Name    string
+		Base    string
+		Palette styles.Palette
+	}
+	ActionEditTheme struct {
+		Name string
+	}
+	ActionRevertThemePalette    struct{}
+	ActionRevertOverriddenTheme struct {
+		Name string
+	}
+	ActionCreateTheme struct {
+		Name string
+		Base string
+	}
+	ActionRenameTheme struct {
+		OldName string
+		NewName string
+	}
+	ActionDeleteTheme struct {
+		Name string
+	}
+	ActionSummarize struct {
 		SessionID string
 	}
 	// ActionSelectReasoningEffort is a message indicating a reasoning effort
@@ -79,9 +115,29 @@ type (
 	ActionSelectSearchProvider struct {
 		Provider string
 	}
+	// ActionPermissionResponse carries the user's decision on a
+	// permission request.
 	ActionPermissionResponse struct {
 		Permission permission.PermissionRequest
 		Action     PermissionAction
+	}
+	// Messages for the integrated pinentry dialog.
+	ActionPinentrySubmit struct {
+		RequestID string
+		Secret    string
+	}
+	ActionPinentryCancel struct {
+		RequestID string
+	}
+	// Messages for the integrated SSH askpass dialog. The secret only
+	// ever travels through ActionSSHSubmit to the workspace, mirroring
+	// how the permission dialog resolves its requests.
+	ActionSSHSubmit struct {
+		RequestID string
+		Secret    string
+	}
+	ActionSSHCancel struct {
+		RequestID string
 	}
 	// ActionRunCustomCommand is a message to run a custom command.
 	ActionRunCustomCommand struct {

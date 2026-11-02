@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testMaxJobs = 50
+
 func TestBackgroundShell_Integration(t *testing.T) {
 	t.Parallel()
 
@@ -20,7 +22,7 @@ func TestBackgroundShell_Integration(t *testing.T) {
 
 	// Start a background shell
 	bgManager := shell.GetBackgroundShellManager()
-	bgShell, err := bgManager.Start(ctx, workingDir, nil, "echo 'hello background' && echo 'done'", "")
+	bgShell, err := bgManager.Start(ctx, workingDir, nil, "echo 'hello background' && echo 'done'", "", testMaxJobs)
 	require.NoError(t, err)
 	require.NotEmpty(t, bgShell.ID)
 
@@ -47,7 +49,7 @@ func TestBackgroundShell_Kill(t *testing.T) {
 
 	// Start a long-running background shell
 	bgManager := shell.GetBackgroundShellManager()
-	bgShell, err := bgManager.Start(ctx, workingDir, nil, "sleep 100", "")
+	bgShell, err := bgManager.Start(ctx, workingDir, nil, "sleep 100", "", testMaxJobs)
 	require.NoError(t, err)
 
 	// Kill it
@@ -70,7 +72,7 @@ func TestBackgroundShell_MultipleOutputCalls(t *testing.T) {
 
 	// Start a background shell
 	bgManager := shell.GetBackgroundShellManager()
-	bgShell, err := bgManager.Start(ctx, workingDir, nil, "echo 'step 1' && echo 'step 2' && echo 'step 3'", "")
+	bgShell, err := bgManager.Start(ctx, workingDir, nil, "echo 'step 1' && echo 'step 2' && echo 'step 3'", "", testMaxJobs)
 	require.NoError(t, err)
 	defer bgManager.Kill(bgShell.ID)
 
@@ -110,7 +112,7 @@ func TestBackgroundShell_EmptyOutput(t *testing.T) {
 
 	// Start a background shell with no output
 	bgManager := shell.GetBackgroundShellManager()
-	bgShell, err := bgManager.Start(ctx, workingDir, nil, "sleep 0.1", "")
+	bgShell, err := bgManager.Start(ctx, workingDir, nil, "sleep 0.1", "", testMaxJobs)
 	require.NoError(t, err)
 	defer bgManager.Kill(bgShell.ID)
 
@@ -132,7 +134,7 @@ func TestBackgroundShell_ExitCode(t *testing.T) {
 
 	// Start a background shell that exits with non-zero code
 	bgManager := shell.GetBackgroundShellManager()
-	bgShell, err := bgManager.Start(ctx, workingDir, nil, "echo 'failing' && exit 42", "")
+	bgShell, err := bgManager.Start(ctx, workingDir, nil, "echo 'failing' && exit 42", "", testMaxJobs)
 	require.NoError(t, err)
 	defer bgManager.Kill(bgShell.ID)
 
@@ -160,7 +162,7 @@ func TestBackgroundShell_WithBlockFuncs(t *testing.T) {
 
 	// Start a background shell with a blocked command
 	bgManager := shell.GetBackgroundShellManager()
-	bgShell, err := bgManager.Start(ctx, workingDir, blockFuncs, "curl example.com", "")
+	bgShell, err := bgManager.Start(ctx, workingDir, blockFuncs, "curl example.com", "", testMaxJobs)
 	require.NoError(t, err)
 	defer bgManager.Kill(bgShell.ID)
 
@@ -173,11 +175,11 @@ func TestBackgroundShell_WithBlockFuncs(t *testing.T) {
 	// The command should have been blocked, check stderr or error
 	if execErr != nil {
 		// Error might contain the message
-		require.Contains(t, execErr.Error(), "not allowed")
+		require.Contains(t, execErr.Error(), "is a dangerous command")
 	} else {
 		// Or it might be in stderr
 		output := stdout + stderr
-		require.Contains(t, output, "not allowed")
+		require.Contains(t, output, "is a dangerous command")
 	}
 }
 
@@ -189,7 +191,7 @@ func TestBackgroundShell_StdoutAndStderr(t *testing.T) {
 
 	// Start a background shell with both stdout and stderr
 	bgManager := shell.GetBackgroundShellManager()
-	bgShell, err := bgManager.Start(ctx, workingDir, nil, "echo 'stdout message' && echo 'stderr message' >&2", "")
+	bgShell, err := bgManager.Start(ctx, workingDir, nil, "echo 'stdout message' && echo 'stderr message' >&2", "", testMaxJobs)
 	require.NoError(t, err)
 	defer bgManager.Kill(bgShell.ID)
 
@@ -211,7 +213,7 @@ func TestBackgroundShell_ConcurrentAccess(t *testing.T) {
 
 	// Start a background shell
 	bgManager := shell.GetBackgroundShellManager()
-	bgShell, err := bgManager.Start(ctx, workingDir, nil, "for i in 1 2 3 4 5; do echo \"line $i\"; sleep 0.05; done", "")
+	bgShell, err := bgManager.Start(ctx, workingDir, nil, "for i in 1 2 3 4 5; do echo \"line $i\"; sleep 0.05; done", "", testMaxJobs)
 	require.NoError(t, err)
 	defer bgManager.Kill(bgShell.ID)
 
@@ -264,7 +266,7 @@ func TestBackgroundShell_List(t *testing.T) {
 	// Start multiple background shells
 	shells := make([]*shell.BackgroundShell, 3)
 	for i := range 3 {
-		bgShell, err := bgManager.Start(ctx, workingDir, nil, "sleep 1", "")
+		bgShell, err := bgManager.Start(ctx, workingDir, nil, "sleep 1", "", testMaxJobs)
 		require.NoError(t, err)
 		shells[i] = bgShell
 	}
@@ -293,7 +295,7 @@ func TestBackgroundShell_AutoBackground(t *testing.T) {
 	t.Run("quick command completes synchronously", func(t *testing.T) {
 		t.Parallel()
 		bgManager := shell.GetBackgroundShellManager()
-		bgShell, err := bgManager.Start(ctx, workingDir, nil, "echo 'quick'", "")
+		bgShell, err := bgManager.Start(ctx, workingDir, nil, "echo 'quick'", "", testMaxJobs)
 		require.NoError(t, err)
 
 		// Wait threshold time
@@ -314,7 +316,7 @@ func TestBackgroundShell_AutoBackground(t *testing.T) {
 	t.Run("long command stays in background", func(t *testing.T) {
 		t.Parallel()
 		bgManager := shell.GetBackgroundShellManager()
-		bgShell, err := bgManager.Start(ctx, workingDir, nil, "sleep 20 && echo '20 seconds completed'", "")
+		bgShell, err := bgManager.Start(ctx, workingDir, nil, "sleep 20 && echo '20 seconds completed'", "", testMaxJobs)
 		require.NoError(t, err)
 		defer bgManager.Kill(bgShell.ID)
 
@@ -346,7 +348,7 @@ func runJobOutputTool(t *testing.T, shellID string, wait bool, timeoutSeconds *i
 		Name:  JobOutputToolName,
 		Input: input,
 	}
-	resp, err := NewJobOutputTool().Run(context.Background(), call)
+	resp, err := NewJobOutputTool(t.TempDir()).Run(context.Background(), call)
 	require.NoError(t, err)
 	return resp
 }
@@ -355,7 +357,7 @@ func TestJobOutputTool_WaitCompletion(t *testing.T) {
 	t.Parallel()
 
 	bgManager := shell.GetBackgroundShellManager()
-	bgShell, err := bgManager.Start(t.Context(), t.TempDir(), nil, "echo 'job done'", "")
+	bgShell, err := bgManager.Start(t.Context(), t.TempDir(), nil, "echo 'job done'", "", testMaxJobs)
 	require.NoError(t, err)
 	defer bgManager.Kill(bgShell.ID)
 
@@ -368,7 +370,7 @@ func TestJobOutputTool_WaitTimeout(t *testing.T) {
 	t.Parallel()
 
 	bgManager := shell.GetBackgroundShellManager()
-	bgShell, err := bgManager.Start(t.Context(), t.TempDir(), nil, "echo 'early output'; sleep 30", "")
+	bgShell, err := bgManager.Start(t.Context(), t.TempDir(), nil, "echo 'early output'; sleep 30", "", testMaxJobs)
 	require.NoError(t, err)
 	defer bgManager.Kill(bgShell.ID)
 
