@@ -279,6 +279,14 @@ type sessionAgent struct {
 	// across the agent. Cancel uses its current value as the per-session
 	// high-water mark.
 	acceptSeqGen uint64
+
+	// asyncWake pushes a detached tool call's result back into a session,
+	// starting or queueing a turn. Nil disables async tool calls.
+	asyncWake func(ctx context.Context, sessionID, prompt string)
+	// asyncMu guards asyncPending, which tracks detached tool calls per
+	// session so Cancel can stop them after their turn has ended.
+	asyncMu      sync.Mutex
+	asyncPending map[string]map[string]*pendingAsyncTool
 }
 
 type SessionAgentOptions struct {
@@ -299,6 +307,9 @@ type SessionAgentOptions struct {
 	ToolContext          *tools.ToolContext
 	// Hooks runs lifecycle hooks for turns and compaction. Nil runs none.
 	Hooks *hooks.Runner
+	// AsyncToolWake pushes the result of a detached tool call back into the
+	// session. Nil disables async tool calls.
+	AsyncToolWake func(ctx context.Context, sessionID, prompt string)
 	// titles is shared by a coordinator's agents so one drain covers all.
 	titles *titleTracker
 }
@@ -321,6 +332,7 @@ func NewSessionAgent(
 		toolContext:          opts.ToolContext,
 		runComplete:          opts.RunComplete,
 		hooks:                opts.Hooks,
+		asyncWake:            opts.AsyncToolWake,
 		messageQueue:         csync.NewMap[string, []SessionAgentCall](),
 		notes:                csync.NewMap[string, []string](),
 		activeRequests:       csync.NewMap[string, *activeCancel](),
@@ -792,6 +804,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 
 	// Copy mutable fields under lock to avoid races with SetTools.
 	agentTools := filterToolsForChannel(a.tools.Copy(), call.Channel, mcp.GetStates())
+	agentTools = a.wrapToolsForAsync(agentTools, call.SessionID)
 	largeModel := a.models().Large
 	systemPrompt := a.systemPrompt.Get()
 	promptPrefix := a.systemPromptPrefix.Get()
@@ -906,6 +919,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 				callContext,
 				filterToolsForChannel(a.tools.Copy(), call.Channel, mcp.GetStates()),
 			)
+			prepared.Tools = a.wrapToolsForAsync(prepared.Tools, call.SessionID)
 
 			// Drain queued follow-up prompts for this step. Calls covered
 			// by a cancel recorded while they sat in the queue are dropped:
@@ -2151,6 +2165,10 @@ func (a *sessionAgent) Cancel(sessionID string) {
 		slog.Debug("Clearing queued prompts", "session_id", sessionID)
 		a.clearQueueAndNotify(sessionID)
 	}
+
+	// Detached tool calls outlive the turn that spawned them, so the turn's
+	// own cancel does not reach them. A user cancel must stop them too.
+	a.cancelAsyncTools(sessionID)
 }
 
 func (a *sessionAgent) ClearQueue(sessionID string) {
@@ -2181,6 +2199,10 @@ func (a *sessionAgent) takeNotes(sessionID string) []string {
 // and any in-flight title generation to finish writing.
 func (a *sessionAgent) CancelAll() {
 	deadline := time.Now().Add(5 * time.Second)
+	// Detached tool calls may belong to sessions that are idle (their turn
+	// already ended), so they are not covered by the activeRequests loop
+	// below and must be stopped explicitly.
+	a.cancelAllAsyncTools()
 	if a.IsBusy() {
 		for key := range a.activeRequests.Seq2() {
 			a.Cancel(key) // key is sessionID

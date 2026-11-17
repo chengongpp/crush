@@ -865,6 +865,7 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 		Notify:               c.notify,
 		RunComplete:          c.runComplete,
 		Hooks:                c.hookRunner,
+		AsyncToolWake:        c.asyncToolWake,
 		titles:               &c.titles,
 	})
 
