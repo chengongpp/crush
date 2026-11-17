@@ -23,7 +23,7 @@ var AsyncToolThreshold = time.Second
 // The completion is delivered as a hidden user message: it is model context,
 // not something the user typed.
 func (c *coordinator) asyncToolWake(ctx context.Context, sessionID, prompt string) {
-	if _, err := c.run(message.WithHiddenUserMessage(ctx), nil, sessionID, prompt); err != nil && !errors.Is(err, context.Canceled) {
+	if _, err := c.run(message.WithHiddenUserMessage(ctx), nil, nil, sessionID, prompt); err != nil && !errors.Is(err, context.Canceled) {
 		slog.Error("Failed to wake session for async tool result",
 			"session_id", sessionID, "error", err)
 	}
