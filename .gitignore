@@ -56,3 +56,4 @@ completions/crush.*sh
 .task
 claude-code/
 docs/*.md
+/docs-site
